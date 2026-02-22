@@ -205,3 +205,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Data folders (large / generated)
+data/raw/
+data/processed/
+
+# Large data files
+*.csv
+*.parquet
+
+# Keep documentation
+!data/README.md
+
+# Optional: keep small samples
+!data/sample/

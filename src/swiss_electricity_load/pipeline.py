@@ -11,6 +11,15 @@ from swiss_electricity_load.swissgrid import build_swissgrid_dataset
 from swiss_electricity_load.weather import build_weather_hourly_dataset, align_weather_to_timestamps
 
 
+def save_csv_and_parquet(df, csv_path):
+    """Save one dataset to CSV and Parquet with the same file name."""
+    csv_path = Path(csv_path)
+    parquet_path = csv_path.with_suffix(".parquet")
+    df.to_csv(csv_path, index=False)
+    df.to_parquet(parquet_path, index=False)
+    return parquet_path
+
+
 def run_pipeline(
     raw_dir,
     processed_dir,
@@ -33,7 +42,10 @@ def run_pipeline(
     )
     # Quality checks (fail fast if data is broken)
     validate_swissgrid_dataset(swissgrid)
+    swissgrid_parquet_path = swissgrid_path.with_suffix(".parquet")
+    swissgrid.to_parquet(swissgrid_parquet_path, index=False)
     print(f"Swissgrid rows: {len(swissgrid):,} -> {swissgrid_path}")
+    print(f"Swissgrid parquet: {swissgrid_parquet_path}")
 
     if skip_weather:
         return
@@ -45,23 +57,28 @@ def run_pipeline(
     )
     # Quality checks on raw weather time series
     validate_weather_hourly_dataset(weather_hourly)
+    weather_hourly_parquet_path = weather_hourly_path.with_suffix(".parquet")
+    weather_hourly.to_parquet(weather_hourly_parquet_path, index=False)
     print(f"Weather hourly rows: {len(weather_hourly):,} -> {weather_hourly_path}")
+    print(f"Weather hourly parquet: {weather_hourly_parquet_path}")
 
     weather_qh = align_weather_to_timestamps(weather_hourly, swissgrid["timestamp"])
     # Quality checks after resampling/alignment
     validate_weather_quarter_hourly_dataset(weather_qh)
     weather_qh_path = processed_dir / "weather_quarter_hourly.csv"
-    weather_qh.to_csv(weather_qh_path, index=False)
+    weather_qh_parquet_path = save_csv_and_parquet(weather_qh, weather_qh_path)
     print(f"Weather quarter-hourly rows: {len(weather_qh):,} -> {weather_qh_path}")
+    print(f"Weather quarter-hourly parquet: {weather_qh_parquet_path}")
 
     model_input = swissgrid.merge(weather_qh, on="timestamp", how="left")
     # Final quality checks before saving model input
     validate_model_input(model_input)
     model_path = processed_dir / "model_input_quarter_hourly.csv"
-    model_input.to_csv(model_path, index=False)
+    model_parquet_path = save_csv_and_parquet(model_input, model_path)
 
     missing_weather = int(model_input["temp_weighted"].isna().sum())
     print(f"Model input rows: {len(model_input):,} -> {model_path}")
+    print(f"Model input parquet: {model_parquet_path}")
     print(f"Rows missing weather features after merge: {missing_weather:,}")
 
 
