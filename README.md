@@ -40,3 +40,16 @@ Optional arguments:
 - `--swissgrid-end-year 2026`
 - `--download-missing-swissgrid-years`
 - `--weather-start-year 2009`
+
+## Build Training Features
+Create a training dataset with calendar and lag features from `model_input_quarter_hourly.*`:
+
+```bash
+poetry run python -c "from swiss_electricity_load.features import build_training_dataset; build_training_dataset()"
+```
+
+Custom example:
+
+```bash
+poetry run python -c "from swiss_electricity_load.features import build_training_dataset; build_training_dataset(input_path='data/processed/model_input_quarter_hourly.parquet', output_path='data/processed/training_dataset_quarter_hourly.parquet', target_column='load', lag_steps=(1,4,96))"
+```
