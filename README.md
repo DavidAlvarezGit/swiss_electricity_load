@@ -115,3 +115,17 @@ Custom full-flow example:
 ```bash
 poetry run swiss-load-fullflow --cv-folds 3 --cv-test-fraction 0.1 --cv-min-train-fraction 0.4 --predict-last-n 96
 ```
+
+
+## Streamlit Dashboard
+Launch dashboard for metrics, predictions, CV, and inference outputs:
+
+```bash
+poetry run swiss-load-dashboard
+```
+
+You can also point to a custom processed folder:
+
+```bash
+poetry run python -m swiss_electricity_load.dashboard --processed-dir data/processed
+```

@@ -15,6 +15,7 @@ dependencies = [
     "pyarrow (==15.0.2)",
     "lightgbm (>=4.6.0,<5.0.0)",
     "scikit-learn (>=1.8.0,<2.0.0)",
+    "streamlit (>=1.43.2,<2.0.0)",
 ]
 
 [project.scripts]
@@ -22,6 +23,7 @@ swiss-load-pipeline = "swiss_electricity_load.pipeline:main"
 swiss-load-train = "swiss_electricity_load.model:main"
 swiss-load-predict = "swiss_electricity_load.predict:main"
 swiss-load-fullflow = "swiss_electricity_load.fullflow:main"
+swiss-load-dashboard = "swiss_electricity_load.dashboard:launch"
 
 [tool.poetry]
 packages = [{ include = "swiss_electricity_load", from = "src" }]
