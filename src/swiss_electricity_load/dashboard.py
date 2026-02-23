@@ -266,7 +266,8 @@ def render_dashboard(processed_dir="data/processed"):
 
         baseline_mae = report.get("baseline_metrics", {}).get("mae")
         linear_mae = report.get("linear_metrics", {}).get("mae")
-        lgbm_mae = report.get("lightgbm_metrics", {}).get("mae") if report.get("lightgbm_metrics") else None
+        lgbm_metrics = report.get("lightgbm_metrics")
+        lgbm_mae = lgbm_metrics.get("mae") if lgbm_metrics else None
 
         linear_gain = _improvement_pct(baseline_mae, linear_mae)
         lgbm_gain = _improvement_pct(baseline_mae, lgbm_mae)
@@ -277,6 +278,12 @@ def render_dashboard(processed_dir="data/processed"):
         c3.metric("Baseline MAE", _format_number(baseline_mae))
         c4.metric("Linear MAE", _format_number(linear_mae), delta=(f"{linear_gain:.2f}% vs baseline" if linear_gain is not None else None))
         c5.metric("LightGBM MAE", _format_number(lgbm_mae), delta=(f"{lgbm_gain:.2f}% vs baseline" if lgbm_gain is not None else None))
+        if lgbm_metrics is None:
+            horizon_steps = report.get("horizon_steps", None)
+            if horizon_steps is None:
+                st.info("LightGBM metrics not found in report. Train with `--use-lightgbm` to populate.")
+            else:
+                st.info(f"LightGBM metrics not found. Train with `swiss-load-train --use-lightgbm --horizon-steps {horizon_steps}`.")
 
         tabs = st.tabs(["Performance", "Predictions", "Cross-Validation", "Inference"])
 
