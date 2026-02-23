@@ -226,6 +226,21 @@ def render_dashboard(processed_dir="data/processed"):
         [role="option"][aria-selected="true"] { background: #e5e7eb !important; }
         [data-baseweb="select"] > div { background: #ffffff; border: 1px solid #d1d5db; }
         input, textarea { background: #ffffff !important; color: #111827 !important; }
+        [data-testid="stAlert"] {
+            background: #eef2ff !important;
+            color: #111827 !important;
+            border: 1px solid #c7d2fe !important;
+        }
+        [data-testid="stAlert"] * { color: #111827 !important; }
+        .stButton > button, .stDownloadButton > button {
+            background: #2563eb !important;
+            color: #ffffff !important;
+            border: none !important;
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover {
+            background: #1d4ed8 !important;
+            color: #ffffff !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
