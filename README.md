@@ -136,3 +136,8 @@ You can also point to a custom processed folder:
 ```bash
 poetry run python -m swiss_electricity_load.dashboard --processed-dir data/processed
 ```
+
+## Deploy On Azure
+For a simple Azure deployment using Container Apps + ACR, follow:
+
+`DEPLOY_AZURE.md`
