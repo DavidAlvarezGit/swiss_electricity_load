@@ -250,7 +250,7 @@ def render_dashboard(processed_dir="data/processed"):
 
     st.sidebar.header("Controls")
     processed_dir = Path(st.sidebar.text_input("Processed directory", str(processed_dir)))
-    chart_points = st.sidebar.slider("Max chart points", min_value=200, max_value=5000, value=1000, step=100)
+    chart_points = st.sidebar.slider("Max chart points", min_value=100, max_value=2000, value=100, step=50)
     downsample_mode = "Auto"
     every_n = None
     show_tail_rows = 0
@@ -303,14 +303,9 @@ def render_dashboard(processed_dir="data/processed"):
             else:
                 st.info(f"LightGBM metrics not found. Train with `swiss-load-train --use-lightgbm --horizon-steps {horizon_steps}`.")
 
-        tabs = st.tabs(["Performance", "Predictions", "Inference"])
+        tabs = st.tabs(["Predictions", "Inference"])
 
         with tabs[0]:
-            st.subheader("Model Performance Summary")
-            table = _build_metric_table(report)
-            st.dataframe(table, width="stretch")
-
-        with tabs[1]:
             st.subheader("Test Predictions")
             if preds is None:
                 st.info("model_predictions file not found.")
@@ -385,7 +380,7 @@ def render_dashboard(processed_dir="data/processed"):
                     else:
                         st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
 
-        with tabs[2]:
+        with tabs[1]:
             st.subheader("Latest Inference")
             if inf is None:
                 st.info("No inference_predictions file found. Run swiss-load-predict or swiss-load-fullflow.")
