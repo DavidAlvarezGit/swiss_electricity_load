@@ -129,10 +129,13 @@ def _build_artifact_table(processed_dir):
     return pd.DataFrame(rows)
 
 
-def _downsample_time_df(df, max_points):
+def _downsample_time_df(df, max_points, every_n=None):
     if df is None or len(df) <= max_points:
         return df
-    step = max(1, len(df) // max_points)
+    if every_n is not None and every_n > 1:
+        step = every_n
+    else:
+        step = max(1, len(df) // max_points)
     return df.iloc[::step].copy()
 
 
@@ -224,7 +227,10 @@ def render_dashboard(processed_dir="data/processed"):
     st.sidebar.header("Controls")
     processed_dir = Path(st.sidebar.text_input("Processed directory", str(processed_dir)))
     chart_points = st.sidebar.slider("Max chart points", min_value=200, max_value=5000, value=1000, step=100)
-    show_all_points = st.sidebar.checkbox("Show all points (no downsample)", value=True)
+    downsample_mode = st.sidebar.selectbox("Downsample mode", options=["Auto", "Every Nth", "Full (may crash)"], index=0)
+    every_n = None
+    if downsample_mode == "Every Nth":
+        every_n = st.sidebar.slider("Plot every Nth point", min_value=2, max_value=50, value=5, step=1)
     show_tail_rows = st.sidebar.slider("Table rows", min_value=20, max_value=300, value=60, step=20)
     show_heavy_tables = st.sidebar.checkbox("Show large data tables", value=False)
     force_reload = st.sidebar.button("Reload data")
@@ -289,8 +295,10 @@ def render_dashboard(processed_dir="data/processed"):
                     st.warning("Prediction table is empty.")
                 else:
                     view = preds.copy()
-                    if not show_all_points:
-                        view = _downsample_time_df(view, chart_points)
+                    if downsample_mode == "Full (may crash)":
+                        pass
+                    else:
+                        view = _downsample_time_df(view, chart_points, every_n=every_n)
 
                     all_pred_cols = [c for c in ["baseline_pred", "linear_pred", "lightgbm_pred"] if c in view.columns]
                     selected_pred_cols = st.multiselect(
@@ -387,8 +395,10 @@ def render_dashboard(processed_dir="data/processed"):
                     st.warning("Inference table is empty.")
                 else:
                     inf_view = inf.copy()
-                    if not show_all_points:
-                        inf_view = _downsample_time_df(inf_view, chart_points)
+                    if downsample_mode == "Full (may crash)":
+                        pass
+                    else:
+                        inf_view = _downsample_time_df(inf_view, chart_points, every_n=every_n)
                     cols = [c for c in ["lightgbm_pred", "lightgbm_q10", "lightgbm_q50", "lightgbm_q90"] if c in inf_view.columns]
                     if cols:
                         render_timeseries_chart(st, inf_view, cols, title="Latest Inference")
