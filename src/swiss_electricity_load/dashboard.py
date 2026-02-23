@@ -198,7 +198,7 @@ def render_timeseries_chart(st, df, y_columns, title=None, x_col="timestamp", x_
     )
 
     # Disable Streamlit theme override to keep charts high-contrast and readable.
-    st.altair_chart(chart, use_container_width=True, theme=None)
+    st.altair_chart(chart, width="stretch", theme=None)
 
 
 def render_dashboard(processed_dir="data/processed"):
@@ -210,26 +210,10 @@ def render_dashboard(processed_dir="data/processed"):
     st.markdown(
         """
         <style>
-        [data-testid="stAppViewContainer"] {
-            background: #ffffff;
-            color: #0f172a;
-        }
-        [data-testid="stSidebar"] {
-            background: #f8fafc;
-        }
-        .stMarkdown, .stCaption, .stText, .stMetric, label, p, h1, h2, h3, h4, h5, h6, span, div {
-            color: #0f172a !important;
-        }
-        [data-baseweb="select"] *, [role="radiogroup"] * {
-            color: #0f172a !important;
-        }
-        .metric-card {
-            border: 1px solid #dbe3ef;
-            background: #ffffff;
-            border-radius: 14px;
-            padding: 14px;
-            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
-        }
+        [data-testid="stAppViewContainer"] { background: #ffffff; }
+        [data-testid="stSidebar"] { background: #f3f4f6; }
+        .stMarkdown, .stCaption, .stText, .stMetric, label, p, h1, h2, h3, h4, h5, h6, span, div { color: #111827; }
+        [data-baseweb="select"] * { color: #111827; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -240,6 +224,7 @@ def render_dashboard(processed_dir="data/processed"):
     st.sidebar.header("Controls")
     processed_dir = Path(st.sidebar.text_input("Processed directory", str(processed_dir)))
     chart_points = st.sidebar.slider("Max chart points", min_value=200, max_value=5000, value=1000, step=100)
+    show_all_points = st.sidebar.checkbox("Show all points (no downsample)", value=True)
     show_tail_rows = st.sidebar.slider("Table rows", min_value=20, max_value=300, value=60, step=20)
     show_heavy_tables = st.sidebar.checkbox("Show large data tables", value=False)
     force_reload = st.sidebar.button("Reload data")
@@ -290,13 +275,7 @@ def render_dashboard(processed_dir="data/processed"):
         with tabs[0]:
             st.subheader("Model Performance Summary")
             table = _build_metric_table(report)
-            st.dataframe(table, use_container_width=True)
-
-            metric_choice = st.selectbox("Metric to compare", ["mae", "rmse", "mape"], index=0, key=f"metric_{horizon_label}")
-            if metric_choice in table.columns:
-                chart_df = table[["model", metric_choice]].dropna().set_index("model")
-                if not chart_df.empty:
-                    st.bar_chart(chart_df)
+            st.dataframe(table, width="stretch")
 
         with tabs[1]:
             st.subheader("Test Predictions")
@@ -309,8 +288,9 @@ def render_dashboard(processed_dir="data/processed"):
                 if preds is None or preds.empty:
                     st.warning("Prediction table is empty.")
                 else:
-                    view = preds.tail(min(chart_points, len(preds))).copy()
-                    view = _downsample_time_df(view, chart_points)
+                    view = preds.copy()
+                    if not show_all_points:
+                        view = _downsample_time_df(view, chart_points)
 
                     all_pred_cols = [c for c in ["baseline_pred", "linear_pred", "lightgbm_pred"] if c in view.columns]
                     selected_pred_cols = st.multiselect(
@@ -369,7 +349,7 @@ def render_dashboard(processed_dir="data/processed"):
                         qc2.metric("Average Interval Width", _format_number(width))
 
                     if show_heavy_tables:
-                        st.dataframe(view.tail(show_tail_rows), use_container_width=True)
+                        st.dataframe(view.tail(show_tail_rows), width="stretch")
                     else:
                         st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
 
@@ -387,11 +367,11 @@ def render_dashboard(processed_dir="data/processed"):
                         {"model": "lightgbm", **(cv.get("mean_lightgbm_metrics") or {})},
                     ]
                 )
-                st.dataframe(summary, use_container_width=True)
+                st.dataframe(summary, width="stretch")
 
                 per_fold_df = _build_cv_table(cv)
                 if not per_fold_df.empty:
-                    st.dataframe(per_fold_df, use_container_width=True)
+                    st.dataframe(per_fold_df, width="stretch")
                     chart_cols = [c for c in ["baseline_mae", "linear_mae", "lightgbm_mae"] if c in per_fold_df.columns]
                     if chart_cols:
                         render_timeseries_chart(st, per_fold_df, chart_cols, title="CV Metric by Fold", x_col="fold", x_is_time=False)
@@ -406,13 +386,14 @@ def render_dashboard(processed_dir="data/processed"):
                 if inf is None or inf.empty:
                     st.warning("Inference table is empty.")
                 else:
-                    inf_view = inf.tail(min(chart_points, len(inf)))
-                    inf_view = _downsample_time_df(inf_view, chart_points)
+                    inf_view = inf.copy()
+                    if not show_all_points:
+                        inf_view = _downsample_time_df(inf_view, chart_points)
                     cols = [c for c in ["lightgbm_pred", "lightgbm_q10", "lightgbm_q50", "lightgbm_q90"] if c in inf_view.columns]
                     if cols:
                         render_timeseries_chart(st, inf_view, cols, title="Latest Inference")
                     if show_heavy_tables:
-                        st.dataframe(inf_view.tail(show_tail_rows), use_container_width=True)
+                        st.dataframe(inf_view.tail(show_tail_rows), width="stretch")
                     else:
                         st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
 
@@ -454,7 +435,7 @@ def render_dashboard(processed_dir="data/processed"):
         st.write(f"Processed directory: `{processed_dir}`")
         art_df = _build_artifact_table(processed_dir)
         if not art_df.empty:
-            st.dataframe(art_df, use_container_width=True)
+            st.dataframe(art_df, width="stretch")
 
 
 def launch():
