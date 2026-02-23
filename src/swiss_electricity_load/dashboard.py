@@ -217,6 +217,11 @@ def render_dashboard(processed_dir="data/processed"):
         [data-testid="stSidebar"] { background: #f3f4f6; }
         .stMarkdown, .stCaption, .stText, .stMetric, label, p, h1, h2, h3, h4, h5, h6, span, div { color: #111827; }
         [data-baseweb="select"] * { color: #111827; }
+        [data-baseweb="popover"] * { color: #111827; }
+        [data-baseweb="menu"] { background: #ffffff; }
+        [data-baseweb="menu"] * { color: #111827; }
+        [data-baseweb="select"] > div { background: #ffffff; border: 1px solid #d1d5db; }
+        input, textarea { background: #ffffff !important; color: #111827 !important; }
         </style>
         """,
         unsafe_allow_html=True,
