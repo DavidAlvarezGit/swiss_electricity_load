@@ -2,6 +2,8 @@
 
 Production-grade forecasting project for Swiss electricity load, built end-to-end from ingestion to executive dashboard.
 
+**Live Demo:** https://swiss-energy-forecast.orangedune-8851111d.germanywestcentral.azurecontainerapps.io/
+
 ## Project Highlights
 - Built a complete ML product workflow: data ingestion, feature engineering, model training, probabilistic inference, and visualization.
 - Designed a 24h-ahead forecasting dashboard for business stakeholders (accuracy, uncertainty bands, and model drivers).
