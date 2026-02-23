@@ -22,10 +22,10 @@ def _cache_data(func):
 
 
 @_cache_data
-def load_table(base_dir, stem):
+def load_table(base_dir, stem, suffix=""):
     base_dir = Path(base_dir)
-    parquet_path = base_dir / f"{stem}.parquet"
-    csv_path = base_dir / f"{stem}.csv"
+    parquet_path = base_dir / f"{stem}{suffix}.parquet"
+    csv_path = base_dir / f"{stem}{suffix}.csv"
 
     if parquet_path.exists():
         import pandas as pd
@@ -39,8 +39,8 @@ def load_table(base_dir, stem):
 
 
 @_cache_data
-def load_report(processed_dir):
-    report_path = Path(processed_dir) / "model_report.json"
+def load_report(processed_dir, suffix=""):
+    report_path = Path(processed_dir) / f"model_report{suffix}.json"
     if not report_path.exists():
         return None, None
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -68,6 +68,25 @@ def _to_time_sorted(df):
     out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
     out = out.dropna(subset=["timestamp"]).sort_values("timestamp")
     return out.reset_index(drop=True)
+
+
+def _available_years(df):
+    import pandas as pd
+
+    if df is None or "timestamp" not in df.columns:
+        return []
+    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    years = ts.dt.year.dropna().unique().tolist()
+    return sorted(int(y) for y in years)
+
+
+def _filter_by_year(df, year):
+    import pandas as pd
+
+    if df is None or year in (None, "All"):
+        return df
+    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    return df.loc[ts.dt.year == int(year)].copy()
 
 
 def _build_metric_table(report):
@@ -231,155 +250,175 @@ def render_dashboard(processed_dir="data/processed"):
     st.title("Swiss Electricity Load Forecasting Dashboard")
     st.caption("Professional model monitoring for training, validation, and inference artifacts.")
 
-    report, report_path = load_report(processed_dir)
-    preds, preds_path = load_table(processed_dir, "model_predictions")
-    inf, inf_path = load_table(processed_dir, "inference_predictions")
+    def render_forecast_panel(horizon_suffix, horizon_label):
+        report, report_path = load_report(processed_dir, suffix=horizon_suffix)
+        preds, preds_path = load_table(processed_dir, "model_predictions", suffix=horizon_suffix)
+        inf, inf_path = load_table(processed_dir, "inference_predictions", suffix=horizon_suffix)
 
-    if report is None:
-        st.error("model_report.json not found. Run training first (swiss-load-train).")
-        st.stop()
+        if report is None:
+            st.error(f"model_report{horizon_suffix}.json not found. Train with --horizon-steps for {horizon_label}.")
+            return
 
-    baseline_mae = report.get("baseline_metrics", {}).get("mae")
-    linear_mae = report.get("linear_metrics", {}).get("mae")
-    lgbm_mae = report.get("lightgbm_metrics", {}).get("mae") if report.get("lightgbm_metrics") else None
+        years = sorted(set(_available_years(preds) + _available_years(inf)))
+        year_options = ["All"] + [str(y) for y in years]
+        year_choice = st.selectbox("Year filter", options=year_options, key=f"year_filter_{horizon_label}")
+        year_filter = None if year_choice == "All" else int(year_choice)
 
-    linear_gain = _improvement_pct(baseline_mae, linear_mae)
-    lgbm_gain = _improvement_pct(baseline_mae, lgbm_mae)
+        baseline_mae = report.get("baseline_metrics", {}).get("mae")
+        linear_mae = report.get("linear_metrics", {}).get("mae")
+        lgbm_mae = report.get("lightgbm_metrics", {}).get("mae") if report.get("lightgbm_metrics") else None
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Rows (Train)", f"{report.get('n_rows_train', 0):,}")
-    c2.metric("Rows (Test)", f"{report.get('n_rows_test', 0):,}")
-    c3.metric("Baseline MAE", _format_number(baseline_mae))
-    c4.metric("Linear MAE", _format_number(linear_mae), delta=(f"{linear_gain:.2f}% vs baseline" if linear_gain is not None else None))
-    c5.metric("LightGBM MAE", _format_number(lgbm_mae), delta=(f"{lgbm_gain:.2f}% vs baseline" if lgbm_gain is not None else None))
+        linear_gain = _improvement_pct(baseline_mae, linear_mae)
+        lgbm_gain = _improvement_pct(baseline_mae, lgbm_mae)
 
-    tabs = st.tabs(["Performance", "Predictions", "Cross-Validation", "Inference", "Artifacts"])
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Rows (Train)", f"{report.get('n_rows_train', 0):,}")
+        c2.metric("Rows (Test)", f"{report.get('n_rows_test', 0):,}")
+        c3.metric("Baseline MAE", _format_number(baseline_mae))
+        c4.metric("Linear MAE", _format_number(linear_mae), delta=(f"{linear_gain:.2f}% vs baseline" if linear_gain is not None else None))
+        c5.metric("LightGBM MAE", _format_number(lgbm_mae), delta=(f"{lgbm_gain:.2f}% vs baseline" if lgbm_gain is not None else None))
 
-    with tabs[0]:
-        st.subheader("Model Performance Summary")
-        table = _build_metric_table(report)
-        st.dataframe(table, use_container_width=True)
+        tabs = st.tabs(["Performance", "Predictions", "Cross-Validation", "Inference"])
 
-        metric_choice = st.selectbox("Metric to compare", ["mae", "rmse", "mape"], index=0)
-        if metric_choice in table.columns:
-            chart_df = table[["model", metric_choice]].dropna().set_index("model")
-            if not chart_df.empty:
-                st.bar_chart(chart_df)
+        with tabs[0]:
+            st.subheader("Model Performance Summary")
+            table = _build_metric_table(report)
+            st.dataframe(table, use_container_width=True)
 
-    with tabs[1]:
-        st.subheader("Test Predictions")
-        if preds is None:
-            st.info("model_predictions file not found.")
-        else:
-            preds = _to_time_sorted(preds)
+            metric_choice = st.selectbox("Metric to compare", ["mae", "rmse", "mape"], index=0, key=f"metric_{horizon_label}")
+            if metric_choice in table.columns:
+                chart_df = table[["model", metric_choice]].dropna().set_index("model")
+                if not chart_df.empty:
+                    st.bar_chart(chart_df)
 
-            if preds is None or preds.empty:
-                st.warning("Prediction table is empty.")
+        with tabs[1]:
+            st.subheader("Test Predictions")
+            if preds is None:
+                st.info("model_predictions file not found.")
             else:
-                view = preds.tail(min(chart_points, len(preds))).copy()
-                view = _downsample_time_df(view, chart_points)
+                preds = _to_time_sorted(preds)
+                preds = _filter_by_year(preds, year_filter)
 
-                all_pred_cols = [c for c in ["baseline_pred", "linear_pred", "lightgbm_pred"] if c in view.columns]
-                selected_pred_cols = st.multiselect("Prediction series", options=all_pred_cols, default=all_pred_cols)
-                plot_mode = st.radio(
-                    "Plot mode",
-                    options=["Actual scale", "Indexed (start=100)", "Deviation vs y_true"],
-                    horizontal=True,
-                )
+                if preds is None or preds.empty:
+                    st.warning("Prediction table is empty.")
+                else:
+                    view = preds.tail(min(chart_points, len(preds))).copy()
+                    view = _downsample_time_df(view, chart_points)
 
-                if "y_true" in view.columns and selected_pred_cols:
-                    if plot_mode == "Actual scale":
-                        line_cols = ["y_true"] + selected_pred_cols
-                        render_timeseries_chart(st, view, line_cols, title="Predictions vs Actual")
-                    elif plot_mode == "Indexed (start=100)":
-                        idx_df = view[["timestamp", "y_true"] + selected_pred_cols].copy()
-                        for col in ["y_true"] + selected_pred_cols:
-                            base = idx_df[col].iloc[0]
-                            if base == 0:
-                                idx_df[col] = 0.0
-                            else:
-                                idx_df[col] = idx_df[col] / base * 100.0
-                        st.caption("Each series is re-scaled to 100 at the first displayed timestamp.")
-                        render_timeseries_chart(st, idx_df, [c for c in idx_df.columns if c != "timestamp"], title="Indexed Series (Start=100)")
+                    all_pred_cols = [c for c in ["baseline_pred", "linear_pred", "lightgbm_pred"] if c in view.columns]
+                    selected_pred_cols = st.multiselect(
+                        "Prediction series",
+                        options=all_pred_cols,
+                        default=all_pred_cols,
+                        key=f"pred_series_{horizon_label}",
+                    )
+                    plot_mode = st.radio(
+                        "Plot mode",
+                        options=["Actual scale", "Indexed (start=100)", "Deviation vs y_true"],
+                        horizontal=True,
+                        key=f"plot_mode_{horizon_label}",
+                    )
+
+                    if "y_true" in view.columns and selected_pred_cols:
+                        if plot_mode == "Actual scale":
+                            line_cols = ["y_true"] + selected_pred_cols
+                            render_timeseries_chart(st, view, line_cols, title="Predictions vs Actual")
+                        elif plot_mode == "Indexed (start=100)":
+                            idx_df = view[["timestamp", "y_true"] + selected_pred_cols].copy()
+                            for col in ["y_true"] + selected_pred_cols:
+                                base = idx_df[col].iloc[0]
+                                if base == 0:
+                                    idx_df[col] = 0.0
+                                else:
+                                    idx_df[col] = idx_df[col] / base * 100.0
+                            st.caption("Each series is re-scaled to 100 at the first displayed timestamp.")
+                            render_timeseries_chart(st, idx_df, [c for c in idx_df.columns if c != "timestamp"], title="Indexed Series (Start=100)")
+                        else:
+                            dev_df = view[["timestamp"]].copy()
+                            for col in selected_pred_cols:
+                                dev_df[f"{col}_minus_y_true"] = view[col] - view["y_true"]
+                            st.caption("Deviation chart: prediction - y_true (closer to 0 is better).")
+                            render_timeseries_chart(st, dev_df, [c for c in dev_df.columns if c != "timestamp"], title="Deviation vs y_true")
+
+                    residual_model = st.selectbox(
+                        "Residual diagnostics model",
+                        options=all_pred_cols,
+                        index=min(1, len(all_pred_cols) - 1),
+                        key=f"residual_model_{horizon_label}",
+                    )
+                    if residual_model and "y_true" in view.columns:
+                        residual_col = "residual"
+                        view[residual_col] = view["y_true"] - view[residual_model]
+                        st.caption(f"Residuals = y_true - {residual_model}")
+                        st.line_chart(view.set_index("timestamp")[[residual_col]])
+
+                    if {"lightgbm_q10", "lightgbm_q50", "lightgbm_q90", "y_true"}.issubset(view.columns):
+                        q_cols = ["lightgbm_q10", "lightgbm_q50", "lightgbm_q90", "y_true"]
+                        render_timeseries_chart(st, view, q_cols, title="Quantile Bands and Actual")
+                        coverage = ((view["y_true"] >= view["lightgbm_q10"]) & (view["y_true"] <= view["lightgbm_q90"])).mean() * 100
+                        width = (view["lightgbm_q90"] - view["lightgbm_q10"]).mean()
+                        qc1, qc2 = st.columns(2)
+                        qc1.metric("Quantile Coverage (q10-q90)", f"{coverage:.2f}%")
+                        qc2.metric("Average Interval Width", _format_number(width))
+
+                    if show_heavy_tables:
+                        st.dataframe(view.tail(show_tail_rows), use_container_width=True)
                     else:
-                        dev_df = view[["timestamp"]].copy()
-                        for col in selected_pred_cols:
-                            dev_df[f"{col}_minus_y_true"] = view[col] - view["y_true"]
-                        st.caption("Deviation chart: prediction - y_true (closer to 0 is better).")
-                        render_timeseries_chart(st, dev_df, [c for c in dev_df.columns if c != "timestamp"], title="Deviation vs y_true")
+                        st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
 
-                residual_model = st.selectbox("Residual diagnostics model", options=all_pred_cols, index=min(1, len(all_pred_cols) - 1))
-                if residual_model and "y_true" in view.columns:
-                    residual_col = "residual"
-                    view[residual_col] = view["y_true"] - view[residual_model]
-                    st.caption(f"Residuals = y_true - {residual_model}")
-                    st.line_chart(view.set_index("timestamp")[[residual_col]])
-
-                if {"lightgbm_q10", "lightgbm_q50", "lightgbm_q90", "y_true"}.issubset(view.columns):
-                    q_cols = ["lightgbm_q10", "lightgbm_q50", "lightgbm_q90", "y_true"]
-                    render_timeseries_chart(st, view, q_cols, title="Quantile Bands and Actual")
-                    coverage = ((view["y_true"] >= view["lightgbm_q10"]) & (view["y_true"] <= view["lightgbm_q90"])).mean() * 100
-                    width = (view["lightgbm_q90"] - view["lightgbm_q10"]).mean()
-                    qc1, qc2 = st.columns(2)
-                    qc1.metric("Quantile Coverage (q10-q90)", f"{coverage:.2f}%")
-                    qc2.metric("Average Interval Width", _format_number(width))
-
-                if show_heavy_tables:
-                    st.dataframe(view.tail(show_tail_rows), use_container_width=True)
-                else:
-                    st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
-
-    with tabs[2]:
-        st.subheader("Time-Series CV")
-        cv = report.get("time_series_cv")
-        if not cv:
-            st.info("No CV results found in report. Train with --cv-folds >= 2")
-        else:
-            st.write(f"Folds used: **{cv.get('n_folds')}**")
-            summary = pd.DataFrame(
-                [
-                    {"model": "baseline", **(cv.get("mean_baseline_metrics") or {})},
-                    {"model": "linear", **(cv.get("mean_linear_metrics") or {})},
-                    {"model": "lightgbm", **(cv.get("mean_lightgbm_metrics") or {})},
-                ]
-            )
-            st.dataframe(summary, use_container_width=True)
-
-            per_fold_df = _build_cv_table(cv)
-            if not per_fold_df.empty:
-                st.dataframe(per_fold_df, use_container_width=True)
-                chart_cols = [c for c in ["baseline_mae", "linear_mae", "lightgbm_mae"] if c in per_fold_df.columns]
-                if chart_cols:
-                    render_timeseries_chart(st, per_fold_df, chart_cols, title="CV Metric by Fold", x_col="fold", x_is_time=False)
-
-    with tabs[3]:
-        st.subheader("Latest Inference")
-        if inf is None:
-            st.info("No inference_predictions file found. Run swiss-load-predict or swiss-load-fullflow.")
-        else:
-            inf = _to_time_sorted(inf)
-            if inf is None or inf.empty:
-                st.warning("Inference table is empty.")
+        with tabs[2]:
+            st.subheader("Time-Series CV")
+            cv = report.get("time_series_cv")
+            if not cv:
+                st.info("No CV results found in report. Train with --cv-folds >= 2")
             else:
-                inf_view = inf.tail(min(chart_points, len(inf)))
-                inf_view = _downsample_time_df(inf_view, chart_points)
-                cols = [c for c in ["lightgbm_pred", "lightgbm_q10", "lightgbm_q50", "lightgbm_q90"] if c in inf_view.columns]
-                if cols:
-                    render_timeseries_chart(st, inf_view, cols, title="Latest Inference")
-                if show_heavy_tables:
-                    st.dataframe(inf_view.tail(show_tail_rows), use_container_width=True)
-                else:
-                    st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
-
-                csv_bytes = inf_view.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    label="Download Displayed Inference CSV",
-                    data=csv_bytes,
-                    file_name="inference_subset.csv",
-                    mime="text/csv",
+                st.write(f"Folds used: **{cv.get('n_folds')}**")
+                summary = pd.DataFrame(
+                    [
+                        {"model": "baseline", **(cv.get("mean_baseline_metrics") or {})},
+                        {"model": "linear", **(cv.get("mean_linear_metrics") or {})},
+                        {"model": "lightgbm", **(cv.get("mean_lightgbm_metrics") or {})},
+                    ]
                 )
+                st.dataframe(summary, use_container_width=True)
 
-    with tabs[4]:
+                per_fold_df = _build_cv_table(cv)
+                if not per_fold_df.empty:
+                    st.dataframe(per_fold_df, use_container_width=True)
+                    chart_cols = [c for c in ["baseline_mae", "linear_mae", "lightgbm_mae"] if c in per_fold_df.columns]
+                    if chart_cols:
+                        render_timeseries_chart(st, per_fold_df, chart_cols, title="CV Metric by Fold", x_col="fold", x_is_time=False)
+
+        with tabs[3]:
+            st.subheader("Latest Inference")
+            if inf is None:
+                st.info("No inference_predictions file found. Run swiss-load-predict or swiss-load-fullflow.")
+            else:
+                inf = _to_time_sorted(inf)
+                inf = _filter_by_year(inf, year_filter)
+                if inf is None or inf.empty:
+                    st.warning("Inference table is empty.")
+                else:
+                    inf_view = inf.tail(min(chart_points, len(inf)))
+                    inf_view = _downsample_time_df(inf_view, chart_points)
+                    cols = [c for c in ["lightgbm_pred", "lightgbm_q10", "lightgbm_q50", "lightgbm_q90"] if c in inf_view.columns]
+                    if cols:
+                        render_timeseries_chart(st, inf_view, cols, title="Latest Inference")
+                    if show_heavy_tables:
+                        st.dataframe(inf_view.tail(show_tail_rows), use_container_width=True)
+                    else:
+                        st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
+
+                    csv_bytes = inf_view.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        label="Download Displayed Inference CSV",
+                        data=csv_bytes,
+                        file_name=f"inference_subset{horizon_suffix}.csv",
+                        mime="text/csv",
+                        key=f"download_{horizon_label}",
+                    )
+
+        st.divider()
         st.subheader("Artifacts")
         st.write(f"Processed directory: `{processed_dir}`")
         if report_path:
@@ -395,6 +434,17 @@ def render_dashboard(processed_dir="data/processed"):
             for m in saved_models:
                 st.write(f"- `{m}`")
 
+    horizon_tabs = st.tabs(["Forecast 1h", "Forecast 12h", "Artifacts"])
+
+    with horizon_tabs[0]:
+        render_forecast_panel("_h1", "1h")
+
+    with horizon_tabs[1]:
+        render_forecast_panel("_h12", "12h")
+
+    with horizon_tabs[2]:
+        st.subheader("Artifacts")
+        st.write(f"Processed directory: `{processed_dir}`")
         art_df = _build_artifact_table(processed_dir)
         if not art_df.empty:
             st.dataframe(art_df, use_container_width=True)

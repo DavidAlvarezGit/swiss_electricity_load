@@ -5,6 +5,21 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+SAFE_CALENDAR_FEATURES = {"hour", "minute", "day_of_week", "day_of_month", "month", "is_weekend"}
+SAFE_WEATHER_FEATURES = {
+    "temp_weighted",
+    "HDH",
+    "CDH",
+    "temp_72h",
+    "extreme_cold",
+    "zurich",
+    "geneva",
+    "basel",
+    "bern",
+    "lausanne",
+    "lugano",
+}
+
 
 def find_training_file(input_path=None):
     """Find training dataset file (.parquet preferred, then .csv)."""
@@ -71,16 +86,62 @@ def split_time_order(df, test_fraction=0.2):
     return train_df, test_df
 
 
-def get_feature_columns(df, target_column):
-    feature_columns = []
+def _is_target_lag_feature(column_name, target_column):
+    return str(column_name).startswith(f"{target_column}_lag_")
+
+
+def leakage_audit(df, target_column, selected_features, extra_exclude=None):
+    """
+    Flag numeric columns that are not used under safe mode and may leak target information.
+    These are often contemporaneous operational variables.
+    """
+    selected = set(selected_features)
+    suspicious = []
+    exclude = {"timestamp", target_column}
+    if extra_exclude:
+        exclude.update(extra_exclude)
+
     for col in df.columns:
-        if col in ["timestamp", target_column]:
+        if col in exclude:
             continue
-        if pd.api.types.is_numeric_dtype(df[col]):
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        if col in selected:
+            continue
+        suspicious.append(col)
+    return suspicious
+
+
+def get_feature_columns(df, target_column, safe_features_only=True, extra_exclude=None):
+    """
+    Build model feature list.
+
+    safe_features_only=True (default):
+    - target lag features
+    - calendar features
+    - weather features
+    This avoids using same-timestamp operational energy columns that can leak target.
+    """
+    feature_columns = []
+    exclude = {"timestamp", target_column}
+    if extra_exclude:
+        exclude.update(extra_exclude)
+
+    for col in df.columns:
+        if col in exclude:
+            continue
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+
+        if safe_features_only:
+            if col in SAFE_CALENDAR_FEATURES or col in SAFE_WEATHER_FEATURES or _is_target_lag_feature(col, target_column):
+                feature_columns.append(col)
+        else:
             feature_columns.append(col)
 
     if not feature_columns:
-        raise ValueError("No numeric feature columns found")
+        policy = "safe feature policy" if safe_features_only else "open feature policy"
+        raise ValueError(f"No numeric feature columns found under {policy}")
 
     return feature_columns
 
@@ -102,7 +163,11 @@ def mape(y_true, y_pred):
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
 
 
-def baseline_predict(test_df, target_column):
+def baseline_predict(test_df, target_column, horizon_steps=0, base_target_column=None):
+    if horizon_steps > 0:
+        base_col = base_target_column or target_column
+        return test_df[base_col].to_numpy(dtype=float)
+
     lag_col = f"{target_column}_lag_1"
     if lag_col in test_df.columns:
         return test_df[lag_col].to_numpy(dtype=float)
@@ -304,6 +369,8 @@ def run_time_series_cv(
     test_fraction=0.2,
     min_train_fraction=0.5,
     use_lightgbm=False,
+    horizon_steps=0,
+    base_target_column=None,
 ):
     """
     Run rolling time-series cross-validation.
@@ -324,7 +391,12 @@ def run_time_series_cv(
     for fold_id, (train_df, test_df) in enumerate(folds, start=1):
         y_test = test_df[target_column].to_numpy(dtype=float)
 
-        baseline_pred = baseline_predict(test_df, target_column)
+        baseline_pred = baseline_predict(
+            test_df,
+            target_column=target_column,
+            horizon_steps=horizon_steps,
+            base_target_column=base_target_column,
+        )
         baseline_metrics = evaluate_predictions(y_test, baseline_pred)
         baseline_metrics_all.append(baseline_metrics)
 
@@ -365,6 +437,17 @@ def run_time_series_cv(
     return result
 
 
+def _format_horizon_suffix(horizon_steps, output_suffix=None):
+    if output_suffix is not None:
+        return output_suffix
+    if horizon_steps <= 0:
+        return ""
+    minutes = horizon_steps * 15
+    if minutes % 60 == 0:
+        return f"_h{minutes // 60}"
+    return f"_m{minutes}"
+
+
 def train_models(
     input_path=None,
     output_dir="data/processed",
@@ -378,6 +461,9 @@ def train_models(
     cv_test_fraction=None,
     cv_min_train_fraction=0.5,
     save_models=True,
+    safe_features_only=True,
+    horizon_steps=0,
+    output_suffix=None,
 ):
     """
     Train two beginner-friendly models:
@@ -395,26 +481,49 @@ def train_models(
     if "timestamp" not in df.columns:
         raise ValueError("Training dataset must contain a 'timestamp' column")
 
+    horizon_steps = int(horizon_steps)
+    if horizon_steps < 0:
+        raise ValueError("horizon_steps must be >= 0")
+
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     target = choose_target_column(df, target_column=target_column)
-    feature_columns = get_feature_columns(df, target)
+
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    df["target_future"] = df[target].shift(-horizon_steps) if horizon_steps > 0 else df[target]
+    df = df.dropna(subset=["target_future"]).reset_index(drop=True)
+
+    feature_columns = get_feature_columns(
+        df,
+        target,
+        safe_features_only=safe_features_only,
+        extra_exclude={"target_future"},
+    )
+    suspicious_columns = leakage_audit(df, target, feature_columns, extra_exclude={"target_future"})
 
     train_df, test_df = split_time_order(df, test_fraction=test_fraction)
 
-    y_test = test_df[target].to_numpy(dtype=float)
+    y_test = test_df["target_future"].to_numpy(dtype=float)
 
-    # Baseline: previous value
-    baseline_pred = baseline_predict(test_df, target)
+    # Baseline: naive persistence for forecast horizon
+    baseline_pred = baseline_predict(
+        test_df,
+        target_column="target_future",
+        horizon_steps=horizon_steps,
+        base_target_column=target,
+    )
     baseline_metrics = evaluate_predictions(y_test, baseline_pred)
 
     # Advanced: linear regression via least squares
-    coefficients = fit_linear_model(train_df, feature_columns, target)
+    coefficients = fit_linear_model(train_df, feature_columns, "target_future")
     linear_pred = predict_linear_model(test_df, feature_columns, coefficients)
     linear_metrics = evaluate_predictions(y_test, linear_pred)
 
+    forecast_delta = pd.Timedelta(minutes=15 * horizon_steps)
+    forecast_timestamps = test_df["timestamp"] + forecast_delta
     prediction_table = pd.DataFrame(
         {
-            "timestamp": test_df["timestamp"].values,
+            "timestamp": forecast_timestamps.values,
+            "source_timestamp": test_df["timestamp"].values,
             "y_true": y_test,
             "baseline_pred": baseline_pred,
             "linear_pred": linear_pred,
@@ -425,7 +534,7 @@ def train_models(
     if make_quantile_interval:
         train_pred = predict_linear_model(train_df, feature_columns, coefficients)
         lower, upper = add_quantile_interval(
-            train_true=train_df[target].to_numpy(dtype=float),
+            train_true=train_df["target_future"].to_numpy(dtype=float),
             train_pred=train_pred,
             test_pred=linear_pred,
             alpha=alpha,
@@ -437,11 +546,19 @@ def train_models(
     report = {
         "input_file": str(source_path),
         "target_column": target,
+        "target_future_column": "target_future",
+        "horizon_steps": horizon_steps,
+        "horizon_minutes": int(horizon_steps * 15),
         "n_rows_total": int(len(df)),
         "n_rows_train": int(len(train_df)),
         "n_rows_test": int(len(test_df)),
         "n_features": int(len(feature_columns)),
         "feature_columns": feature_columns,
+        "feature_policy": "safe" if safe_features_only else "open",
+        "leakage_audit": {
+            "suspicious_feature_count": len(suspicious_columns),
+            "suspicious_features": suspicious_columns[:50],
+        },
         "baseline_metrics": baseline_metrics,
         "linear_metrics": linear_metrics,
         "lightgbm_metrics": None,
@@ -455,18 +572,19 @@ def train_models(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     models_dir = output_dir / "models"
+    suffix = _format_horizon_suffix(horizon_steps, output_suffix=output_suffix)
 
     if use_lightgbm:
         point_model, lgb_pred = train_lightgbm_point_model(
             train_df=train_df,
             test_df=test_df,
             feature_columns=feature_columns,
-            target_column=target,
+            target_column="target_future",
         )
         prediction_table["lightgbm_pred"] = lgb_pred
         report["lightgbm_metrics"] = evaluate_predictions(y_test, lgb_pred)
         if save_models:
-            point_path = models_dir / "lightgbm_point.txt"
+            point_path = models_dir / f"lightgbm_point{suffix}.txt"
             save_lightgbm_model(point_model, point_path)
             report["saved_models"].append(str(point_path))
 
@@ -475,7 +593,7 @@ def train_models(
             train_df=train_df,
             test_df=test_df,
             feature_columns=feature_columns,
-            target_column=target,
+            target_column="target_future",
             quantiles=(0.1, 0.5, 0.9),
         )
         prediction_table["lightgbm_q10"] = quantile_preds[0.1]
@@ -485,7 +603,7 @@ def train_models(
         if save_models:
             for q, model in quantile_models.items():
                 q_name = int(q * 100)
-                q_path = models_dir / f"lightgbm_quantile_q{q_name}.txt"
+                q_path = models_dir / f"lightgbm_quantile_q{q_name}{suffix}.txt"
                 save_lightgbm_model(model, q_path)
                 report["saved_models"].append(str(q_path))
 
@@ -493,17 +611,19 @@ def train_models(
         effective_cv_test_fraction = test_fraction if cv_test_fraction is None else cv_test_fraction
         report["time_series_cv"] = run_time_series_cv(
             df=df,
-            target_column=target,
+            target_column="target_future",
             feature_columns=feature_columns,
             n_folds=cv_folds,
             test_fraction=effective_cv_test_fraction,
             min_train_fraction=cv_min_train_fraction,
             use_lightgbm=use_lightgbm,
+            horizon_steps=horizon_steps,
+            base_target_column=target,
         )
 
-    report_path = output_dir / "model_report.json"
-    pred_csv_path = output_dir / "model_predictions.csv"
-    pred_parquet_path = output_dir / "model_predictions.parquet"
+    report_path = output_dir / f"model_report{suffix}.json"
+    pred_csv_path = output_dir / f"model_predictions{suffix}.csv"
+    pred_parquet_path = output_dir / f"model_predictions{suffix}.parquet"
 
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     prediction_table.to_csv(pred_csv_path, index=False)
@@ -530,6 +650,13 @@ def build_parser():
     parser.add_argument("--cv-test-fraction", type=float, default=None, help="Test fraction per CV fold (default: same as --test-fraction)")
     parser.add_argument("--cv-min-train-fraction", type=float, default=0.5, help="Minimum training fraction for CV folds")
     parser.add_argument("--no-save-models", action="store_true", help="Do not save trained LightGBM model files")
+    parser.add_argument(
+        "--allow-contemporaneous-features",
+        action="store_true",
+        help="Disable safe feature policy and allow all numeric columns (higher leakage risk)",
+    )
+    parser.add_argument("--horizon-steps", type=int, default=0, help="Forecast horizon in 15-minute steps (e.g., 4=1h)")
+    parser.add_argument("--output-suffix", default=None, help="Optional suffix for output files (e.g., _h1)")
     return parser
 
 
@@ -548,12 +675,17 @@ def main():
         cv_test_fraction=args.cv_test_fraction,
         cv_min_train_fraction=args.cv_min_train_fraction,
         save_models=not args.no_save_models,
+        safe_features_only=not args.allow_contemporaneous_features,
+        horizon_steps=args.horizon_steps,
+        output_suffix=args.output_suffix,
     )
 
     print("Training complete")
     print("Target:", report["target_column"])
     print("Baseline MAE:", report["baseline_metrics"]["mae"])
     print("Linear MAE:", report["linear_metrics"]["mae"])
+    print("Feature policy:", report["feature_policy"])
+    print("Suspicious feature count:", report["leakage_audit"]["suspicious_feature_count"])
     if report["lightgbm_metrics"] is not None:
         print("LightGBM MAE:", report["lightgbm_metrics"]["mae"])
     if report["time_series_cv"] is not None:

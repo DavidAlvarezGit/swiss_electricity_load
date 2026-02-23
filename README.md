@@ -76,6 +76,13 @@ Train with LightGBM (SOTA tabular model):
 poetry run swiss-load-train --use-lightgbm
 ```
 
+By default, training uses a **safe feature policy** (lags + calendar + weather) to reduce leakage risk.
+If you explicitly want all numeric columns (not recommended for forecasting), add:
+
+```bash
+poetry run swiss-load-train --allow-contemporaneous-features
+```
+
 Train LightGBM quantile models (P10/P50/P90):
 
 ```bash

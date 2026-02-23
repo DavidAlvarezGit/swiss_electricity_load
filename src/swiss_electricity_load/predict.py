@@ -5,6 +5,17 @@ import pandas as pd
 from swiss_electricity_load.model import find_training_file, load_table
 
 
+def _format_horizon_suffix(horizon_steps, output_suffix=None):
+    if output_suffix is not None:
+        return output_suffix
+    if horizon_steps <= 0:
+        return ""
+    minutes = horizon_steps * 15
+    if minutes % 60 == 0:
+        return f"_h{minutes // 60}"
+    return f"_m{minutes}"
+
+
 def _import_lightgbm():
     try:
         import lightgbm as lgb
@@ -55,6 +66,8 @@ def run_inference(
     output_dir="data/processed",
     output_prefix="inference_predictions",
     last_n=None,
+    horizon_steps=0,
+    output_suffix=None,
 ):
     """
     Run inference using saved LightGBM models.
@@ -62,6 +75,15 @@ def run_inference(
     - Uses point model if present: lightgbm_point.txt
     - Uses quantile models if present: q10/q50/q90
     """
+    horizon_steps = int(horizon_steps)
+    if horizon_steps < 0:
+        raise ValueError("horizon_steps must be >= 0")
+
+    suffix = _format_horizon_suffix(horizon_steps, output_suffix=output_suffix)
+
+    if isinstance(report_path, (str, Path)) and str(report_path) == "data/processed/model_report.json" and suffix:
+        report_path = Path("data/processed") / f"model_report{suffix}.json"
+
     data_path = find_training_file(input_path)
     df = load_table(data_path)
 
@@ -84,16 +106,22 @@ def run_inference(
     x = df[feature_columns].to_numpy(dtype=float)
 
     model_dir = Path(model_dir)
-    out = pd.DataFrame({"timestamp": df["timestamp"].values})
+    forecast_delta = pd.Timedelta(minutes=15 * horizon_steps)
+    out = pd.DataFrame(
+        {
+            "timestamp": (df["timestamp"] + forecast_delta).values,
+            "source_timestamp": df["timestamp"].values,
+        }
+    )
 
-    point_model_path = model_dir / "lightgbm_point.txt"
+    point_model_path = model_dir / f"lightgbm_point{suffix}.txt"
     if point_model_path.exists():
         point_model = load_lightgbm_booster(point_model_path)
         out["lightgbm_pred"] = point_model.predict(x)
 
-    q10_path = model_dir / "lightgbm_quantile_q10.txt"
-    q50_path = model_dir / "lightgbm_quantile_q50.txt"
-    q90_path = model_dir / "lightgbm_quantile_q90.txt"
+    q10_path = model_dir / f"lightgbm_quantile_q10{suffix}.txt"
+    q50_path = model_dir / f"lightgbm_quantile_q50{suffix}.txt"
+    q90_path = model_dir / f"lightgbm_quantile_q90{suffix}.txt"
 
     if q10_path.exists() and q50_path.exists() and q90_path.exists():
         out["lightgbm_q10"] = load_lightgbm_booster(q10_path).predict(x)
@@ -105,7 +133,7 @@ def run_inference(
             "No model predictions were produced. Check that LightGBM model files exist in data/processed/models"
         )
 
-    csv_path, parquet_path = save_predictions(out, output_dir=output_dir, output_prefix=output_prefix)
+    csv_path, parquet_path = save_predictions(out, output_dir=output_dir, output_prefix=f"{output_prefix}{suffix}")
     return out, csv_path, parquet_path
 
 
@@ -119,6 +147,8 @@ def build_parser():
     parser.add_argument("--output-dir", default="data/processed")
     parser.add_argument("--output-prefix", default="inference_predictions")
     parser.add_argument("--last-n", type=int, default=None, help="Only predict on latest N rows")
+    parser.add_argument("--horizon-steps", type=int, default=0, help="Forecast horizon in 15-minute steps (e.g., 4=1h)")
+    parser.add_argument("--output-suffix", default=None, help="Optional suffix for output files (e.g., _h1)")
     return parser
 
 
@@ -131,6 +161,8 @@ def main():
         output_dir=args.output_dir,
         output_prefix=args.output_prefix,
         last_n=args.last_n,
+        horizon_steps=args.horizon_steps,
+        output_suffix=args.output_suffix,
     )
 
     print("Inference complete")
