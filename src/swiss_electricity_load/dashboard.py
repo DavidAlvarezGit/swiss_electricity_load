@@ -238,7 +238,7 @@ def render_dashboard(processed_dir="data/processed"):
     chart_points = st.sidebar.slider("Max chart points", min_value=200, max_value=5000, value=1000, step=100)
     downsample_mode = "Auto"
     every_n = None
-    show_tail_rows = st.sidebar.slider("Table rows", min_value=20, max_value=300, value=60, step=20)
+    show_tail_rows = 0
     show_heavy_tables = st.sidebar.checkbox("Show large data tables", value=False)
     force_reload = st.sidebar.button("Reload data")
     if force_reload:
@@ -288,7 +288,7 @@ def render_dashboard(processed_dir="data/processed"):
             else:
                 st.info(f"LightGBM metrics not found. Train with `swiss-load-train --use-lightgbm --horizon-steps {horizon_steps}`.")
 
-        tabs = st.tabs(["Performance", "Predictions", "Cross-Validation", "Inference"])
+        tabs = st.tabs(["Performance", "Predictions", "Inference"])
 
         with tabs[0]:
             st.subheader("Model Performance Summary")
@@ -366,34 +366,11 @@ def render_dashboard(processed_dir="data/processed"):
                         qc2.metric("Average Interval Width", _format_number(width))
 
                     if show_heavy_tables:
-                        st.dataframe(view.tail(show_tail_rows), width="stretch")
+                        st.dataframe(view.tail(60), width="stretch")
                     else:
                         st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
 
         with tabs[2]:
-            st.subheader("Time-Series CV")
-            cv = report.get("time_series_cv")
-            if not cv:
-                st.info("No CV results found in report. Train with --cv-folds >= 2")
-            else:
-                st.write(f"Folds used: **{cv.get('n_folds')}**")
-                summary = pd.DataFrame(
-                    [
-                        {"model": "baseline", **(cv.get("mean_baseline_metrics") or {})},
-                        {"model": "linear", **(cv.get("mean_linear_metrics") or {})},
-                        {"model": "lightgbm", **(cv.get("mean_lightgbm_metrics") or {})},
-                    ]
-                )
-                st.dataframe(summary, width="stretch")
-
-                per_fold_df = _build_cv_table(cv)
-                if not per_fold_df.empty:
-                    st.dataframe(per_fold_df, width="stretch")
-                    chart_cols = [c for c in ["baseline_mae", "linear_mae", "lightgbm_mae"] if c in per_fold_df.columns]
-                    if chart_cols:
-                        render_timeseries_chart(st, per_fold_df, chart_cols, title="CV Metric by Fold", x_col="fold", x_is_time=False)
-
-        with tabs[3]:
             st.subheader("Latest Inference")
             if inf is None:
                 st.info("No inference_predictions file found. Run swiss-load-predict or swiss-load-fullflow.")
@@ -409,7 +386,7 @@ def render_dashboard(processed_dir="data/processed"):
                     if cols:
                         render_timeseries_chart(st, inf_view, cols, title="Latest Inference")
                     if show_heavy_tables:
-                        st.dataframe(inf_view.tail(show_tail_rows), width="stretch")
+                        st.dataframe(inf_view.tail(60), width="stretch")
                     else:
                         st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
 
