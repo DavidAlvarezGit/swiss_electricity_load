@@ -34,10 +34,31 @@ The 24h dashboard includes:
 The app is hosted in Azure, so it remains accessible even when the local machine is offline.
 
 ## Tech Stack
-- Python, pandas, scikit-learn, LightGBM, Streamlit
-- Docker
-- Azure Container Apps + Azure Files
-- GitHub Actions CI/CD
+- Language & runtime:
+  - Python 3.12
+- Data processing:
+  - pandas
+  - NumPy
+- ML & forecasting:
+  - scikit-learn (baseline evaluation utilities and metrics)
+  - LightGBM (point forecast + quantile models for P10/P50/P90)
+- Visualization & app layer:
+  - Streamlit (dashboard UI)
+- Data sources:
+  - Swissgrid historical load/covariate files (CSV/Excel)
+  - NASA POWER API (weather covariates)
+- Packaging & dependency management:
+  - Poetry
+  - pip/requirements export for container builds
+- Containerization:
+  - Docker (Python slim base image)
+- Cloud infrastructure:
+  - Azure Container Apps (app hosting)
+  - Azure Container Registry (image storage)
+  - Azure Files (persistent mounted data/artifact storage)
+- CI/CD & automation:
+  - GitHub Actions (build/deploy workflow)
+  - Azure CLI + PowerShell deployment scripts
 
 ## Repository Structure
 - `src/swiss_electricity_load/pipeline.py`: automated ingestion and orchestration
