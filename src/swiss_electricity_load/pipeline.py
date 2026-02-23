@@ -1,6 +1,8 @@
 import argparse
 from pathlib import Path
 
+import pandas as pd
+
 from swiss_electricity_load.quality import (
     validate_model_input,
     validate_swissgrid_dataset,
@@ -40,14 +42,13 @@ def run_pipeline(
         end_year=swissgrid_end_year,
         download_missing_years=download_missing_swissgrid_years,
     )
-    # Quality checks (fail fast if data is broken)
-    validate_swissgrid_dataset(swissgrid)
-    swissgrid_parquet_path = swissgrid_path.with_suffix(".parquet")
-    swissgrid.to_parquet(swissgrid_parquet_path, index=False)
-    print(f"Swissgrid rows: {len(swissgrid):,} -> {swissgrid_path}")
-    print(f"Swissgrid parquet: {swissgrid_parquet_path}")
-
     if skip_weather:
+        # Quality checks (fail fast if data is broken)
+        validate_swissgrid_dataset(swissgrid)
+        swissgrid_parquet_path = swissgrid_path.with_suffix(".parquet")
+        swissgrid.to_parquet(swissgrid_parquet_path, index=False)
+        print(f"Swissgrid rows: {len(swissgrid):,} -> {swissgrid_path}")
+        print(f"Swissgrid parquet: {swissgrid_parquet_path}")
         return
 
     weather_hourly_path = processed_dir / "weather_hourly.csv"
@@ -61,6 +62,16 @@ def run_pipeline(
     weather_hourly.to_parquet(weather_hourly_parquet_path, index=False)
     print(f"Weather hourly rows: {len(weather_hourly):,} -> {weather_hourly_path}")
     print(f"Weather hourly parquet: {weather_hourly_parquet_path}")
+
+    max_weather_ts = weather_hourly["timestamp"].max()
+    if pd.notna(max_weather_ts):
+        swissgrid = swissgrid[pd.to_datetime(swissgrid["timestamp"]) <= max_weather_ts].copy()
+    # Quality checks after trimming to fetched weather range
+    validate_swissgrid_dataset(swissgrid)
+    swissgrid_parquet_path = swissgrid_path.with_suffix(".parquet")
+    swissgrid.to_parquet(swissgrid_parquet_path, index=False)
+    print(f"Swissgrid rows: {len(swissgrid):,} -> {swissgrid_path}")
+    print(f"Swissgrid parquet: {swissgrid_parquet_path}")
 
     weather_qh = align_weather_to_timestamps(weather_hourly, swissgrid["timestamp"])
     # Quality checks after resampling/alignment

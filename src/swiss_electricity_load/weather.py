@@ -108,11 +108,18 @@ def fetch_weather_hourly(start_year=2009, end_date=None):
 
 
 def align_weather_to_timestamps(weather_hourly, timestamps):
-    """Use forward-fill to map hourly weather onto quarter-hour timestamps."""
+    """Use forward-fill to map hourly weather onto quarter-hour timestamps.
+
+    Only align up to the last available weather timestamp to avoid extending
+    beyond fetched data.
+    """
     weather_hourly = weather_hourly.sort_values("timestamp").set_index("timestamp")
 
     target = pd.to_datetime(pd.Series(timestamps))
     target = target.dropna().sort_values().drop_duplicates()
+    last_weather_ts = weather_hourly.index.max()
+    if pd.notna(last_weather_ts):
+        target = target[target <= last_weather_ts]
 
     aligned = weather_hourly.reindex(target, method="ffill")
     aligned = aligned.reset_index().rename(columns={"index": "timestamp"})
