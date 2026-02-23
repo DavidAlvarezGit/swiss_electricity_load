@@ -70,22 +70,22 @@ def _to_time_sorted(df):
     return out.reset_index(drop=True)
 
 
-def _available_years(df):
+def _available_years(df, timestamp_col="timestamp"):
     import pandas as pd
 
-    if df is None or "timestamp" not in df.columns:
+    if df is None or timestamp_col not in df.columns:
         return []
-    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    ts = pd.to_datetime(df[timestamp_col], errors="coerce")
     years = ts.dt.year.dropna().unique().tolist()
     return sorted(int(y) for y in years)
 
 
-def _filter_by_year(df, year):
+def _filter_by_year(df, year, timestamp_col="timestamp"):
     import pandas as pd
 
     if df is None or year in (None, "All"):
         return df
-    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    ts = pd.to_datetime(df[timestamp_col], errors="coerce")
     return df.loc[ts.dt.year == int(year)].copy()
 
 
@@ -219,7 +219,11 @@ def render_dashboard(processed_dir="data/processed"):
         [data-baseweb="select"] * { color: #111827; }
         [data-baseweb="popover"] * { color: #111827; }
         [data-baseweb="menu"] { background: #ffffff; }
-        [data-baseweb="menu"] * { color: #111827; }
+        [data-baseweb="menu"] * { color: #111827 !important; }
+        [role="listbox"] { background: #ffffff !important; }
+        [role="listbox"] * { color: #111827 !important; }
+        [role="option"] { background: #ffffff !important; color: #111827 !important; }
+        [role="option"][aria-selected="true"] { background: #e5e7eb !important; }
         [data-baseweb="select"] > div { background: #ffffff; border: 1px solid #d1d5db; }
         input, textarea { background: #ffffff !important; color: #111827 !important; }
         </style>
@@ -232,10 +236,8 @@ def render_dashboard(processed_dir="data/processed"):
     st.sidebar.header("Controls")
     processed_dir = Path(st.sidebar.text_input("Processed directory", str(processed_dir)))
     chart_points = st.sidebar.slider("Max chart points", min_value=200, max_value=5000, value=1000, step=100)
-    downsample_mode = st.sidebar.selectbox("Downsample mode", options=["Auto", "Every Nth", "Full (may crash)"], index=0)
+    downsample_mode = "Auto"
     every_n = None
-    if downsample_mode == "Every Nth":
-        every_n = st.sidebar.slider("Plot every Nth point", min_value=2, max_value=50, value=5, step=1)
     show_tail_rows = st.sidebar.slider("Table rows", min_value=20, max_value=300, value=60, step=20)
     show_heavy_tables = st.sidebar.checkbox("Show large data tables", value=False)
     force_reload = st.sidebar.button("Reload data")
@@ -255,9 +257,14 @@ def render_dashboard(processed_dir="data/processed"):
             st.error(f"model_report{horizon_suffix}.json not found. Train with --horizon-steps for {horizon_label}.")
             return
 
-        years = sorted(set(_available_years(preds) + _available_years(inf)))
+        filter_col = "source_timestamp" if (preds is not None and "source_timestamp" in preds.columns) else "timestamp"
+        if inf is not None and "source_timestamp" in inf.columns:
+            filter_col = "source_timestamp"
+
+        years = sorted(set(_available_years(preds, filter_col) + _available_years(inf, filter_col)))
         year_options = ["All"] + [str(y) for y in years]
-        year_choice = st.selectbox("Year filter", options=year_options, key=f"year_filter_{horizon_label}")
+        label = "Year filter (source time)" if filter_col == "source_timestamp" else "Year filter"
+        year_choice = st.selectbox(label, options=year_options, key=f"year_filter_{horizon_label}")
         year_filter = None if year_choice == "All" else int(year_choice)
 
         baseline_mae = report.get("baseline_metrics", {}).get("mae")
@@ -294,16 +301,13 @@ def render_dashboard(processed_dir="data/processed"):
                 st.info("model_predictions file not found.")
             else:
                 preds = _to_time_sorted(preds)
-                preds = _filter_by_year(preds, year_filter)
+                preds = _filter_by_year(preds, year_filter, filter_col)
 
                 if preds is None or preds.empty:
                     st.warning("Prediction table is empty.")
                 else:
                     view = preds.copy()
-                    if downsample_mode == "Full (may crash)":
-                        pass
-                    else:
-                        view = _downsample_time_df(view, chart_points, every_n=every_n)
+                    view = _downsample_time_df(view, chart_points, every_n=every_n)
 
                     all_pred_cols = [c for c in ["baseline_pred", "linear_pred", "lightgbm_pred"] if c in view.columns]
                     selected_pred_cols = st.multiselect(
@@ -395,15 +399,12 @@ def render_dashboard(processed_dir="data/processed"):
                 st.info("No inference_predictions file found. Run swiss-load-predict or swiss-load-fullflow.")
             else:
                 inf = _to_time_sorted(inf)
-                inf = _filter_by_year(inf, year_filter)
+                inf = _filter_by_year(inf, year_filter, filter_col)
                 if inf is None or inf.empty:
                     st.warning("Inference table is empty.")
                 else:
                     inf_view = inf.copy()
-                    if downsample_mode == "Full (may crash)":
-                        pass
-                    else:
-                        inf_view = _downsample_time_df(inf_view, chart_points, every_n=every_n)
+                    inf_view = _downsample_time_df(inf_view, chart_points, every_n=every_n)
                     cols = [c for c in ["lightgbm_pred", "lightgbm_q10", "lightgbm_q50", "lightgbm_q90"] if c in inf_view.columns]
                     if cols:
                         render_timeseries_chart(st, inf_view, cols, title="Latest Inference")
