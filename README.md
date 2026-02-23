@@ -39,26 +39,7 @@ The dashboard presents:
 - Feature importance with readable business labels
 
 Live app URL can be found in your Azure Container App output after deployment.
-
-## Quick Start (Minimal Commands)
-Install dependencies:
-
-```bash
-poetry install
-```
-
-Run the dashboard locally:
-
-```bash
-poetry run swiss-load-dashboard
-```
-
-## Cloud Deploy (Single Command)
-Deploy/update on Azure:
-
-```powershell
-.\deploy\azure\deploy.ps1 -AcrName "<your-acr-name>"
-```
+Because the app is hosted on Azure (not on your local machine), it remains accessible even when your computer is turned off.
 
 ## Repository Structure
 - `src/swiss_electricity_load/pipeline.py`: ingestion orchestration
