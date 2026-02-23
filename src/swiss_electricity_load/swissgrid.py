@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from io import BytesIO
 
@@ -89,7 +90,9 @@ def build_swissgrid_dataset(
     output_csv.parent.mkdir(parents=True, exist_ok=True)
 
     files = sorted(list(raw_dir.glob("*.xls")) + list(raw_dir.glob("*.xlsx")))
-    if not files:
+    if end_year is None:
+        end_year = datetime.now().year
+    if not files and not download_missing_years:
         raise ValueError(f"No Excel files found in {raw_dir}")
 
     # Load local files by year.
@@ -99,10 +102,9 @@ def build_swissgrid_dataset(
         if year is not None:
             local_by_year[year] = read_correct_sheet(file_path)
 
-    if not local_by_year:
+    if not local_by_year and not download_missing_years:
         raise ValueError(f"No year-coded Swissgrid files found in {raw_dir}")
-
-    if end_year is None:
+    if local_by_year and end_year is None:
         end_year = max(local_by_year.keys())
 
     frames = []
