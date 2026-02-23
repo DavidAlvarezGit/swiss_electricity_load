@@ -213,32 +213,33 @@ def render_dashboard(processed_dir="data/processed"):
     st.markdown(
         """
         <style>
-        [data-testid="stAppViewContainer"] { background: #ffffff; }
-        [data-testid="stSidebar"] { background: #f3f4f6; }
-        .stMarkdown, .stCaption, .stText, .stMetric, label, p, h1, h2, h3, h4, h5, h6, span, div { color: #111827; }
-        [data-baseweb="select"] * { color: #111827; }
-        [data-baseweb="popover"] * { color: #111827; }
+        [data-testid="stAppViewContainer"] { background: #fbfbfd; }
+        [data-testid="stSidebar"] { background: #f4f6fb; }
+        .stMarkdown, .stCaption, .stText, .stMetric, label, p, h1, h2, h3, h4, h5, h6, span, div { color: #0f172a; }
+        [data-baseweb="select"] * { color: #0f172a; }
+        [data-baseweb="popover"] * { color: #0f172a; }
         [data-baseweb="menu"] { background: #ffffff; }
-        [data-baseweb="menu"] * { color: #111827 !important; }
+        [data-baseweb="menu"] * { color: #0f172a !important; }
         [role="listbox"] { background: #ffffff !important; }
-        [role="listbox"] * { color: #111827 !important; }
-        [role="option"] { background: #ffffff !important; color: #111827 !important; }
+        [role="listbox"] * { color: #0f172a !important; }
+        [role="option"] { background: #ffffff !important; color: #0f172a !important; }
         [role="option"][aria-selected="true"] { background: #e5e7eb !important; }
-        [data-baseweb="select"] > div { background: #ffffff; border: 1px solid #d1d5db; }
-        input, textarea { background: #ffffff !important; color: #111827 !important; }
+        [data-baseweb="select"] > div { background: #ffffff; border: 1px solid #cbd5e1; }
+        input, textarea { background: #ffffff !important; color: #0f172a !important; }
         [data-testid="stAlert"] {
-            background: #eef2ff !important;
-            color: #111827 !important;
-            border: 1px solid #c7d2fe !important;
+            background: #dbeafe !important;
+            color: #0f172a !important;
+            border: 1px solid #93c5fd !important;
         }
-        [data-testid="stAlert"] * { color: #111827 !important; }
+        [data-testid="stAlert"] * { color: #0f172a !important; }
         .stButton > button, .stDownloadButton > button {
-            background: #2563eb !important;
+            background: #1d4ed8 !important;
             color: #ffffff !important;
             border: none !important;
+            border-radius: 8px !important;
         }
         .stButton > button:hover, .stDownloadButton > button:hover {
-            background: #1d4ed8 !important;
+            background: #1e40af !important;
             color: #ffffff !important;
         }
         </style>
@@ -260,8 +261,8 @@ def render_dashboard(processed_dir="data/processed"):
         st.cache_data.clear()
     st.sidebar.caption(f"Refreshed: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
 
-    st.title("Swiss Electricity Load Forecasting Dashboard")
-    st.caption("Professional model monitoring for training, validation, and inference artifacts.")
+    st.title("Swiss Electricity Load Forecasting")
+    st.caption("Clean monitoring for predictions and inference.")
 
     def render_forecast_panel(horizon_suffix, horizon_label):
         report, report_path = load_report(processed_dir, suffix=horizon_suffix)
@@ -276,11 +277,7 @@ def render_dashboard(processed_dir="data/processed"):
         if inf is not None and "source_timestamp" in inf.columns:
             filter_col = "source_timestamp"
 
-        years = sorted(set(_available_years(preds, filter_col) + _available_years(inf, filter_col)))
-        year_options = ["All"] + [str(y) for y in years]
-        label = "Year filter (source time)" if filter_col == "source_timestamp" else "Year filter"
-        year_choice = st.selectbox(label, options=year_options, key=f"year_filter_{horizon_label}")
-        year_filter = None if year_choice == "All" else int(year_choice)
+        year_filter = None
 
         baseline_mae = report.get("baseline_metrics", {}).get("mae")
         linear_mae = report.get("linear_metrics", {}).get("mae")
@@ -290,12 +287,10 @@ def render_dashboard(processed_dir="data/processed"):
         linear_gain = _improvement_pct(baseline_mae, linear_mae)
         lgbm_gain = _improvement_pct(baseline_mae, lgbm_mae)
 
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Rows (Train)", f"{report.get('n_rows_train', 0):,}")
-        c2.metric("Rows (Test)", f"{report.get('n_rows_test', 0):,}")
-        c3.metric("Baseline MAE", _format_number(baseline_mae))
-        c4.metric("Linear MAE", _format_number(linear_mae), delta=(f"{linear_gain:.2f}% vs baseline" if linear_gain is not None else None))
-        c5.metric("LightGBM MAE", _format_number(lgbm_mae), delta=(f"{lgbm_gain:.2f}% vs baseline" if lgbm_gain is not None else None))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Baseline MAE", _format_number(baseline_mae))
+        c2.metric("Linear MAE", _format_number(linear_mae), delta=(f"{linear_gain:.2f}% vs baseline" if linear_gain is not None else None))
+        c3.metric("LightGBM MAE", _format_number(lgbm_mae), delta=(f"{lgbm_gain:.2f}% vs baseline" if lgbm_gain is not None else None))
         if lgbm_metrics is None:
             horizon_steps = report.get("horizon_steps", None)
             if horizon_steps is None:
