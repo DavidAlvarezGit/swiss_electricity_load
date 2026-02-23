@@ -136,3 +136,61 @@ You can also point to a custom processed folder:
 ```bash
 poetry run python -m swiss_electricity_load.dashboard --processed-dir data/processed
 ```
+
+## Azure Deployment (Container Apps)
+This repo includes a production-ready container and deployment automation for the Streamlit dashboard.
+
+### 1) Local one-command Azure deploy
+Use the deployment script:
+
+```powershell
+.\deploy\azure\deploy.ps1 -AcrName "<your-unique-acr-name>"
+```
+
+Useful optional flags:
+
+```powershell
+.\deploy\azure\deploy.ps1 `
+  -AcrName "<your-unique-acr-name>" `
+  -ResourceGroup "rg-swiss-load" `
+  -Location "westeurope" `
+  -ContainerAppsEnv "cae-swiss-load" `
+  -ContainerAppName "swiss-load-dashboard" `
+  -ImageTag "latest" `
+  -ProcessedDir "data/processed"
+```
+
+The script will:
+- create/update Resource Group
+- create/update ACR
+- build and push the dashboard image with `az acr build`
+- create/update Container Apps environment
+- create/update the Container App and print the public URL
+
+### 2) GitHub Actions auto-deploy on `main`
+Workflow file:
+- `.github/workflows/deploy-azure-dashboard.yml`
+
+Set these GitHub repository **secrets**:
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+
+Set these GitHub repository **variables**:
+- `AZURE_RESOURCE_GROUP`
+- `AZURE_LOCATION`
+- `AZURE_ACR_NAME`
+- `AZURE_CONTAINERAPPS_ENV`
+- `AZURE_CONTAINER_APP_NAME`
+
+Notes:
+- Use OIDC with `azure/login` for secure auth from GitHub Actions.
+- The workflow deploys on push to `main` and supports manual `workflow_dispatch`.
+
+### 3) Data path in Azure
+The container reads dashboard artifacts from `PROCESSED_DIR` (default: `data/processed`).
+If your processed files are external (recommended), mount storage and set:
+
+```text
+PROCESSED_DIR=/mounted/path/to/processed
+```

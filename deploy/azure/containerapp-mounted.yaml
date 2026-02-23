@@ -1,0 +1,42 @@
+name: swiss-load-dashboard
+type: Microsoft.App/containerApps
+location: Germany West Central
+properties:
+  managedEnvironmentId: /subscriptions/6b9e188e-39a9-437e-a73d-186da8e6a768/resourceGroups/rg-swiss-load-de/providers/Microsoft.App/managedEnvironments/cae-swiss-load
+  configuration:
+    activeRevisionsMode: Single
+    ingress:
+      external: true
+      targetPort: 8501
+      transport: Auto
+      allowInsecure: false
+      traffic:
+      - latestRevision: true
+        weight: 100
+    registries:
+    - server: acrswissloadfrc12345.azurecr.io
+      username: acrswissloadfrc12345
+      passwordSecretRef: acrswissloadfrc12345azurecrio-acrswissloadfrc12345
+    secrets:
+    - name: acrswissloadfrc12345azurecrio-acrswissloadfrc12345
+  template:
+    containers:
+    - name: swiss-load-dashboard
+      image: acrswissloadfrc12345.azurecr.io/swiss-load-dashboard:latest
+      env:
+      - name: PROCESSED_DIR
+        value: /mnt/processed
+      resources:
+        cpu: 1.0
+        memory: 2Gi
+      volumeMounts:
+      - volumeName: processed-volume
+        mountPath: /mnt/processed
+    scale:
+      maxReplicas: 10
+      cooldownPeriod: 300
+      pollingInterval: 30
+    volumes:
+    - name: processed-volume
+      storageType: AzureFile
+      storageName: processedfiles

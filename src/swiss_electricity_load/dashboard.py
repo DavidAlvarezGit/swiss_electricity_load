@@ -47,6 +47,83 @@ def load_report(processed_dir, suffix=""):
     return report, report_path
 
 
+@_cache_data
+def load_lightgbm_feature_importance(processed_dir, suffix="_h24"):
+    import pandas as pd
+    import re
+
+    report, _ = load_report(processed_dir, suffix=suffix)
+    if report is None:
+        return None
+
+    model_path = Path(processed_dir) / "models" / f"lightgbm_point{suffix}.txt"
+    if not model_path.exists():
+        return None
+
+    try:
+        import lightgbm as lgb
+    except Exception:
+        return None
+
+    booster = lgb.Booster(model_file=str(model_path))
+    feature_names = report.get("feature_columns", []) or booster.feature_name()
+    gain = booster.feature_importance(importance_type="gain")
+    split = booster.feature_importance(importance_type="split")
+
+    if not feature_names:
+        feature_names = [f"feature_{i}" for i in range(len(gain))]
+
+    n = min(len(feature_names), len(gain), len(split))
+    if n == 0:
+        return None
+
+    imp = pd.DataFrame(
+        {
+            "feature": feature_names[:n],
+            "gain": gain[:n],
+            "split": split[:n],
+        }
+    )
+    imp = imp[imp["gain"] > 0].copy()
+    if imp.empty:
+        return None
+
+    rename_map = {
+        "hour": "Hour of Day",
+        "minute": "Minute of Hour",
+        "day_of_week": "Day of Week",
+        "day_of_month": "Day of Month",
+        "month": "Month",
+        "is_weekend": "Weekend Flag",
+        "temp_weighted": "Weighted Temperature",
+        "temp_72h": "72h Avg Temperature",
+        "HDH": "Heating Degree Hours",
+        "CDH": "Cooling Degree Hours",
+        "extreme_cold": "Extreme Cold Indicator",
+        "zurich": "Zurich Temperature",
+        "geneva": "Geneva Temperature",
+        "basel": "Basel Temperature",
+        "bern": "Bern Temperature",
+        "lausanne": "Lausanne Temperature",
+        "lugano": "Lugano Temperature",
+    }
+
+    def _feature_label(name):
+        text = str(name)
+        m = re.search(r"_lag_(\d+)", text)
+        if m:
+            steps = int(m.group(1))
+            minutes = steps * 15
+            if minutes % 60 == 0:
+                return f"Load Lag (t-{minutes // 60}h)"
+            return f"Load Lag (t-{minutes}m)"
+        return rename_map.get(text, text.replace("_", " ").title())
+
+    imp["feature"] = imp["feature"].map(_feature_label)
+    imp["gain_pct"] = imp["gain"] / imp["gain"].sum() * 100.0
+    return imp.sort_values("gain", ascending=False).reset_index(drop=True)
+
+
 def _format_number(value, decimals=2):
     if value is None:
         return "-"
@@ -139,7 +216,7 @@ def _downsample_time_df(df, max_points, every_n=None):
     return df.iloc[::step].copy()
 
 
-def render_timeseries_chart(st, df, y_columns, title=None, x_col="timestamp", x_is_time=True):
+def render_timeseries_chart(st, df, y_columns, title=None, x_col="timestamp", x_is_time=True, series_label_map=None):
     import altair as alt
     import pandas as pd
 
@@ -158,6 +235,8 @@ def render_timeseries_chart(st, df, y_columns, title=None, x_col="timestamp", x_
         plot_df = plot_df.dropna(subset=[x_col])
 
     long_df = plot_df.melt(id_vars=[x_col], var_name="series", value_name="value")
+    if series_label_map:
+        long_df["series"] = long_df["series"].map(lambda s: series_label_map.get(s, s))
 
     chart = (
         alt.Chart(long_df)
@@ -201,6 +280,129 @@ def render_timeseries_chart(st, df, y_columns, title=None, x_col="timestamp", x_
     )
 
     # Disable Streamlit theme override to keep charts high-contrast and readable.
+    st.altair_chart(chart, width="stretch", theme=None)
+
+
+def render_quantile_band_chart(st, df, title=None, x_col="timestamp", include_actual=True):
+    import altair as alt
+    import pandas as pd
+
+    required = {"lightgbm_q10", "lightgbm_q50", "lightgbm_q90"}
+    if df is None or df.empty or not required.issubset(df.columns):
+        st.info("Quantile band data is not available.")
+        return
+
+    use_cols = [x_col, "lightgbm_q10", "lightgbm_q50", "lightgbm_q90"]
+    if include_actual and "y_true" in df.columns:
+        use_cols.append("y_true")
+
+    plot_df = df[use_cols].copy()
+    plot_df[x_col] = pd.to_datetime(plot_df[x_col], errors="coerce")
+    plot_df = plot_df.dropna(subset=[x_col]).reset_index(drop=True)
+    if plot_df.empty:
+        st.info("No data to plot.")
+        return
+
+    band = (
+        alt.Chart(plot_df)
+        .mark_area(opacity=0.22, color="#1d4ed8")
+        .encode(
+            x=alt.X(f"{x_col}:T", title="Timestamp"),
+            y=alt.Y("lightgbm_q10:Q", title="Load"),
+            y2="lightgbm_q90:Q",
+            tooltip=[
+                alt.Tooltip(f"{x_col}:T", title="Time"),
+                alt.Tooltip("lightgbm_q10:Q", title="P10", format=",.2f"),
+                alt.Tooltip("lightgbm_q50:Q", title="P50", format=",.2f"),
+                alt.Tooltip("lightgbm_q90:Q", title="P90", format=",.2f"),
+            ],
+        )
+    )
+
+    p50 = (
+        alt.Chart(plot_df)
+        .mark_line(color="#1d4ed8", strokeWidth=2.5)
+        .encode(x=f"{x_col}:T", y="lightgbm_q50:Q")
+    )
+
+    q10_line = (
+        alt.Chart(plot_df)
+        .mark_line(color="#60a5fa", strokeDash=[6, 4], strokeWidth=1.5)
+        .encode(x=f"{x_col}:T", y="lightgbm_q10:Q")
+    )
+    q90_line = (
+        alt.Chart(plot_df)
+        .mark_line(color="#60a5fa", strokeDash=[6, 4], strokeWidth=1.5)
+        .encode(x=f"{x_col}:T", y="lightgbm_q90:Q")
+    )
+
+    chart = band + q10_line + q90_line + p50
+
+    if include_actual and "y_true" in plot_df.columns:
+        actual = (
+            alt.Chart(plot_df)
+            .mark_line(color="#0f172a", strokeWidth=2)
+            .encode(x=f"{x_col}:T", y="y_true:Q")
+        )
+        chart = chart + actual
+
+    chart = (
+        chart.properties(height=420, title=title)
+        .interactive()
+        .configure(background="#ffffff")
+        .configure_axis(
+            labelColor="#0f172a",
+            titleColor="#0f172a",
+            gridColor="#e2e8f0",
+            domainColor="#cbd5e1",
+            tickColor="#94a3b8",
+        )
+        .configure_title(color="#0f172a", fontSize=18, fontWeight="bold")
+        .configure_view(strokeWidth=0)
+    )
+
+    st.altair_chart(chart, width="stretch", theme=None)
+
+
+def render_feature_importance_chart(st, imp_df, top_n=15):
+    import altair as alt
+
+    if imp_df is None or imp_df.empty:
+        st.info("Feature importance is not available.")
+        return
+
+    view = imp_df.head(top_n).copy()
+
+    chart = (
+        alt.Chart(view)
+        .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4)
+        .encode(
+            y=alt.Y("feature:N", sort="-x", title="Feature"),
+            x=alt.X("gain_pct:Q", title="Importance (% of total gain)"),
+            color=alt.Color(
+                "gain_pct:Q",
+                scale=alt.Scale(scheme="blues"),
+                legend=None,
+            ),
+            tooltip=[
+                alt.Tooltip("feature:N", title="Feature"),
+                alt.Tooltip("gain_pct:Q", title="Importance %", format=".2f"),
+                alt.Tooltip("split:Q", title="Splits", format=",.0f"),
+            ],
+        )
+        .properties(height=420, title="Top LightGBM Drivers")
+        .configure(background="#ffffff")
+        .configure_axis(
+            labelColor="#0f172a",
+            titleColor="#0f172a",
+            gridColor="#e2e8f0",
+            domainColor="#cbd5e1",
+            tickColor="#94a3b8",
+        )
+        .configure_title(color="#0f172a", fontSize=18, fontWeight="bold")
+        .configure_view(strokeWidth=0)
+    )
+
     st.altair_chart(chart, width="stretch", theme=None)
 
 
@@ -251,7 +453,7 @@ def render_dashboard(processed_dir="data/processed"):
 
     st.sidebar.header("Controls")
     processed_dir = Path(st.sidebar.text_input("Processed directory", str(processed_dir)))
-    chart_points = st.sidebar.slider("Max chart points", min_value=100, max_value=2000, value=100, step=50)
+    chart_points = st.sidebar.slider("Max chart points", min_value=100, max_value=2000, value=300, step=50)
     downsample_mode = "Auto"
     every_n = None
     show_tail_rows = 0
@@ -260,13 +462,13 @@ def render_dashboard(processed_dir="data/processed"):
         st.cache_data.clear()
     st.sidebar.caption(f"Refreshed: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
 
-    st.title("Swiss Electricity Load Forecasting")
-    st.caption("Clean monitoring for predictions and inference.")
+    st.title("Swiss Electricity Demand Outlook (24h)")
+    st.caption("Executive view focused on next-day demand, forecast performance, and model drivers.")
 
     def render_forecast_panel(horizon_suffix, horizon_label):
-        report, report_path = load_report(processed_dir, suffix=horizon_suffix)
-        preds, preds_path = load_table(processed_dir, "model_predictions", suffix=horizon_suffix)
-        inf, inf_path = load_table(processed_dir, "inference_predictions", suffix=horizon_suffix)
+        report, _ = load_report(processed_dir, suffix=horizon_suffix)
+        preds, _ = load_table(processed_dir, "model_predictions", suffix=horizon_suffix)
+        inf, _ = load_table(processed_dir, "inference_predictions", suffix=horizon_suffix)
 
         if report is None:
             st.error(f"model_report{horizon_suffix}.json not found. Train with --horizon-steps for {horizon_label}.")
@@ -279,17 +481,19 @@ def render_dashboard(processed_dir="data/processed"):
         year_filter = None
 
         baseline_mae = report.get("baseline_metrics", {}).get("mae")
-        linear_mae = report.get("linear_metrics", {}).get("mae")
         lgbm_metrics = report.get("lightgbm_metrics")
         lgbm_mae = lgbm_metrics.get("mae") if lgbm_metrics else None
 
-        linear_gain = _improvement_pct(baseline_mae, linear_mae)
         lgbm_gain = _improvement_pct(baseline_mae, lgbm_mae)
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Baseline MAE", _format_number(baseline_mae))
-        c2.metric("Linear MAE", _format_number(linear_mae), delta=(f"{linear_gain:.2f}% vs baseline" if linear_gain is not None else None))
-        c3.metric("LightGBM MAE", _format_number(lgbm_mae), delta=(f"{lgbm_gain:.2f}% vs baseline" if lgbm_gain is not None else None))
+        c2.metric("LightGBM MAE", _format_number(lgbm_mae))
+        c3.metric(
+            "LightGBM Improvement",
+            (f"{lgbm_gain:.2f}%" if lgbm_gain is not None else "-"),
+            delta=("vs baseline" if lgbm_gain is not None else None),
+        )
         if lgbm_metrics is None:
             horizon_steps = report.get("horizon_steps", None)
             if horizon_steps is None:
@@ -297,7 +501,7 @@ def render_dashboard(processed_dir="data/processed"):
             else:
                 st.info(f"LightGBM metrics not found. Train with `swiss-load-train --use-lightgbm --horizon-steps {horizon_steps}`.")
 
-        tabs = st.tabs(["Predictions", "Inference"])
+        tabs = st.tabs(["Predictions", "Inference", "Model Drivers"])
 
         with tabs[0]:
             st.subheader("Test Predictions")
@@ -313,7 +517,7 @@ def render_dashboard(processed_dir="data/processed"):
                     view = preds.copy()
                     view = _downsample_time_df(view, chart_points, every_n=every_n)
 
-                    all_pred_cols = [c for c in ["baseline_pred", "linear_pred", "lightgbm_pred"] if c in view.columns]
+                    all_pred_cols = [c for c in ["baseline_pred", "lightgbm_pred"] if c in view.columns]
                     selected_pred_cols = st.multiselect(
                         "Prediction series",
                         options=all_pred_cols,
@@ -330,7 +534,17 @@ def render_dashboard(processed_dir="data/processed"):
                     if "y_true" in view.columns and selected_pred_cols:
                         if plot_mode == "Actual scale":
                             line_cols = ["y_true"] + selected_pred_cols
-                            render_timeseries_chart(st, view, line_cols, title="Predictions vs Actual")
+                            render_timeseries_chart(
+                                st,
+                                view,
+                                line_cols,
+                                title="Predictions vs Actual",
+                                series_label_map={
+                                    "y_true": "Actual",
+                                    "baseline_pred": "Baseline",
+                                    "lightgbm_pred": "LightGBM",
+                                },
+                            )
                         elif plot_mode == "Indexed (start=100)":
                             idx_df = view[["timestamp", "y_true"] + selected_pred_cols].copy()
                             for col in ["y_true"] + selected_pred_cols:
@@ -340,13 +554,32 @@ def render_dashboard(processed_dir="data/processed"):
                                 else:
                                     idx_df[col] = idx_df[col] / base * 100.0
                             st.caption("Each series is re-scaled to 100 at the first displayed timestamp.")
-                            render_timeseries_chart(st, idx_df, [c for c in idx_df.columns if c != "timestamp"], title="Indexed Series (Start=100)")
+                            render_timeseries_chart(
+                                st,
+                                idx_df,
+                                [c for c in idx_df.columns if c != "timestamp"],
+                                title="Indexed Series (Start=100)",
+                                series_label_map={
+                                    "y_true": "Actual",
+                                    "baseline_pred": "Baseline",
+                                    "lightgbm_pred": "LightGBM",
+                                },
+                            )
                         else:
                             dev_df = view[["timestamp"]].copy()
                             for col in selected_pred_cols:
                                 dev_df[f"{col}_minus_y_true"] = view[col] - view["y_true"]
                             st.caption("Deviation chart: prediction - y_true (closer to 0 is better).")
-                            render_timeseries_chart(st, dev_df, [c for c in dev_df.columns if c != "timestamp"], title="Deviation vs y_true")
+                            render_timeseries_chart(
+                                st,
+                                dev_df,
+                                [c for c in dev_df.columns if c != "timestamp"],
+                                title="Deviation vs y_true",
+                                series_label_map={
+                                    "baseline_pred_minus_y_true": "Baseline Error",
+                                    "lightgbm_pred_minus_y_true": "LightGBM Error",
+                                },
+                            )
 
                     residual_model = st.selectbox(
                         "Residual diagnostics model",
@@ -361,8 +594,7 @@ def render_dashboard(processed_dir="data/processed"):
                         st.line_chart(view.set_index("timestamp")[[residual_col]])
 
                     if {"lightgbm_q10", "lightgbm_q50", "lightgbm_q90", "y_true"}.issubset(view.columns):
-                        q_cols = ["lightgbm_q10", "lightgbm_q50", "lightgbm_q90", "y_true"]
-                        render_timeseries_chart(st, view, q_cols, title="Quantile Bands and Actual")
+                        render_quantile_band_chart(st, view, title="LightGBM Prediction Interval (P10-P90)", include_actual=True)
                         coverage = ((view["y_true"] >= view["lightgbm_q10"]) & (view["y_true"] <= view["lightgbm_q90"])).mean() * 100
                         width = (view["lightgbm_q90"] - view["lightgbm_q10"]).mean()
                         qc1, qc2 = st.columns(2)
@@ -384,7 +616,14 @@ def render_dashboard(processed_dir="data/processed"):
                     inf_view = inf.copy()
                     inf_view = _downsample_time_df(inf_view, chart_points, every_n=every_n)
                     cols = [c for c in ["lightgbm_pred", "lightgbm_q10", "lightgbm_q50", "lightgbm_q90"] if c in inf_view.columns]
-                    if cols:
+                    if {"lightgbm_q10", "lightgbm_q50", "lightgbm_q90"}.issubset(inf_view.columns):
+                        render_quantile_band_chart(
+                            st,
+                            inf_view,
+                            title="Latest Inference Interval (P10-P90)",
+                            include_actual=False,
+                        )
+                    elif cols:
                         render_timeseries_chart(st, inf_view, cols, title="Latest Inference")
                     st.caption("Table hidden for performance.")
 
@@ -397,40 +636,24 @@ def render_dashboard(processed_dir="data/processed"):
                         key=f"download_{horizon_label}",
                     )
 
-        st.divider()
-        st.subheader("Artifacts")
-        st.write(f"Processed directory: `{processed_dir}`")
-        if report_path:
-            st.write(f"Report: `{report_path}`")
-        if preds_path:
-            st.write(f"Predictions: `{preds_path}`")
-        if inf_path:
-            st.write(f"Inference: `{inf_path}`")
+        with tabs[2]:
+            st.subheader("Variable Importance")
+            imp = load_lightgbm_feature_importance(processed_dir, suffix=horizon_suffix)
+            if imp is None:
+                st.info("LightGBM model importance not available. Train with `--use-lightgbm` for this horizon.")
+            else:
+                render_feature_importance_chart(st, imp, top_n=15)
+                st.caption("Importance is based on total LightGBM gain (higher means stronger contribution).")
+                top5 = float(imp["gain_pct"].head(5).sum())
+                st.metric("Top-5 Driver Share", f"{top5:.2f}%")
+                st.dataframe(
+                    imp[["feature", "gain_pct", "split"]].rename(
+                        columns={"gain_pct": "importance_pct", "split": "split_count"}
+                    ),
+                    width="stretch",
+                )
 
-        saved_models = report.get("saved_models", [])
-        if saved_models:
-            st.write("Saved models:")
-            for m in saved_models:
-                st.write(f"- `{m}`")
-
-    horizon_tabs = st.tabs(["Forecast 1h", "Forecast 12h", "Forecast 24h", "Artifacts"])
-
-    with horizon_tabs[0]:
-        render_forecast_panel("_h1", "1h")
-
-    with horizon_tabs[1]:
-        render_forecast_panel("_h12", "12h")
-
-    with horizon_tabs[2]:
-        render_forecast_panel("_h24", "24h")
-
-    with horizon_tabs[3]:
-        st.subheader("Artifacts")
-        st.write(f"Processed directory: `{processed_dir}`")
-        art_df = _build_artifact_table(processed_dir)
-        if not art_df.empty:
-            st.dataframe(art_df, width="stretch")
-
+    render_forecast_panel("_h24", "24h")
 
 def launch():
     """Launch streamlit app from CLI script."""

@@ -1,0 +1,138 @@
+name: Deploy Azure Dashboard
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/deploy-azure-dashboard.yml"
+      - "Dockerfile"
+      - "requirements.txt"
+      - "src/swiss_electricity_load/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+  AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+  AZURE_CONTAINERAPPS_ENV: ${{ vars.AZURE_CONTAINERAPPS_ENV }}
+  AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+  IMAGE_REPOSITORY: swiss-load-dashboard
+  PROCESSED_DIR: data/processed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required repo variables
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in AZURE_RESOURCE_GROUP AZURE_LOCATION AZURE_ACR_NAME AZURE_CONTAINERAPPS_ENV AZURE_CONTAINER_APP_NAME; do
+            if [ -z "${!var:-}" ]; then
+              echo "Missing repository variable: $var"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            exit 1
+          fi
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure resource group
+        run: |
+          az group create \
+            --name "$AZURE_RESOURCE_GROUP" \
+            --location "$AZURE_LOCATION" >/dev/null
+
+      - name: Ensure ACR
+        run: |
+          set -euo pipefail
+          if ! az acr show --name "$AZURE_ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+            az acr create \
+              --name "$AZURE_ACR_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --sku Basic \
+              --admin-enabled true >/dev/null
+          else
+            az acr update \
+              --name "$AZURE_ACR_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --admin-enabled true >/dev/null
+          fi
+
+      - name: Build image in ACR
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="${GITHUB_SHA::12}"
+          az acr build \
+            --registry "$AZURE_ACR_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$IMAGE_REPOSITORY:$IMAGE_TAG" \
+            --image "$IMAGE_REPOSITORY:latest" \
+            .
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+
+      - name: Ensure Container Apps environment
+        run: |
+          set -euo pipefail
+          if ! az containerapp env show --name "$AZURE_CONTAINERAPPS_ENV" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+            az containerapp env create \
+              --name "$AZURE_CONTAINERAPPS_ENV" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --location "$AZURE_LOCATION" >/dev/null
+          fi
+
+      - name: Deploy Container App
+        run: |
+          set -euo pipefail
+          ACR_LOGIN_SERVER="$(az acr show --name "$AZURE_ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query loginServer -o tsv)"
+          ACR_USERNAME="$(az acr credential show --name "$AZURE_ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query username -o tsv)"
+          ACR_PASSWORD="$(az acr credential show --name "$AZURE_ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query passwords[0].value -o tsv)"
+          IMAGE="$ACR_LOGIN_SERVER/$IMAGE_REPOSITORY:$IMAGE_TAG"
+
+          if ! az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+            az containerapp create \
+              --name "$AZURE_CONTAINER_APP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --environment "$AZURE_CONTAINERAPPS_ENV" \
+              --image "$IMAGE" \
+              --ingress external \
+              --target-port 8501 \
+              --cpu 1.0 \
+              --memory 2.0Gi \
+              --registry-server "$ACR_LOGIN_SERVER" \
+              --registry-username "$ACR_USERNAME" \
+              --registry-password "$ACR_PASSWORD" \
+              --env-vars "PROCESSED_DIR=$PROCESSED_DIR" >/dev/null
+          else
+            az containerapp registry set \
+              --name "$AZURE_CONTAINER_APP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --server "$ACR_LOGIN_SERVER" \
+              --username "$ACR_USERNAME" \
+              --password "$ACR_PASSWORD" >/dev/null
+
+            az containerapp update \
+              --name "$AZURE_CONTAINER_APP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --image "$IMAGE" \
+              --set-env-vars "PROCESSED_DIR=$PROCESSED_DIR" >/dev/null
+          fi
+
+          FQDN="$(az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
+          echo "Dashboard URL: https://$FQDN"
