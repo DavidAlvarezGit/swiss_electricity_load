@@ -1,57 +1,50 @@
 # Swiss Electricity Demand Forecasting Platform
 
-Production-grade forecasting project for Swiss electricity load, built end-to-end from ingestion to executive dashboard.
+Production forecasting platform for Swiss electricity demand, built end-to-end from data ingestion to a cloud-hosted decision dashboard.
 
 **Live Demo:** https://swiss-energy-forecast.orangedune-8851111d.germanywestcentral.azurecontainerapps.io/
 
-## Project Highlights
-- Built a complete ML product workflow: data ingestion, feature engineering, model training, probabilistic inference, and visualization.
-- Designed a 24h-ahead forecasting dashboard for business stakeholders (accuracy, uncertainty bands, and model drivers).
-- Deployed to Azure Container Apps with containerization, CI/CD, and persistent cloud storage for model artifacts.
+## Overview
+This project delivers a full machine learning workflow for next-day (24h) electricity demand forecasting:
+- ingest and standardize Swissgrid load data and weather covariates,
+- build forecasting-ready feature sets,
+- train and evaluate baseline and LightGBM models,
+- generate probabilistic forecasts (P10/P50/P90),
+- serve results in a business-facing dashboard.
 
-## What This Demonstrates (Skills)
-- Time-series forecasting (lag features, calendar effects, weather covariates, horizon modeling)
-- ML engineering (train/infer separation, model persistence, quantile forecasts, feature importance)
-- Data engineering (raw-to-processed pipelines, reproducible datasets, quality checks)
-- Cloud deployment (Docker, Azure Container Apps, Azure Files, GitHub Actions OIDC)
-- Product thinking (executive-facing dashboard design, uncertainty communication, UX simplification)
+## Key Capabilities
+- Time-series feature engineering (lag, calendar, weather)
+- Point and quantile forecasting with LightGBM
+- Baseline-vs-model performance tracking
+- Forecast uncertainty visualization (prediction intervals)
+- Model driver analysis (feature importance with readable labels)
+- Cloud deployment on Azure Container Apps with persistent storage
 
-## Architecture
-- Data ingestion:
-  - Swissgrid load and covariates
-  - NASA POWER weather + weighted weather features
-- Feature layer:
-  - Quarter-hourly target dataset
-  - Lag + calendar + weather predictors
-- Modeling:
-  - Baseline and LightGBM point forecast
-  - LightGBM quantile models (P10/P50/P90)
-- App layer:
-  - Streamlit dashboard focused on 24h forecast performance and risk bands
-- Deployment:
-  - Docker container
-  - Azure Container Apps
-  - Azure Files mounted as persistent `processed` store
+## System Architecture
+- **Data ingestion:** Swissgrid load/covariates + NASA POWER weather
+- **Feature layer:** quarter-hourly model input with lag/calendar/weather features
+- **Model layer:** baseline + LightGBM point/quantile models
+- **Serving layer:** Streamlit dashboard (24h executive view)
+- **Infrastructure:** Docker, Azure Container Apps, Azure Files, GitHub Actions CI/CD
 
-## Dashboard (Business View)
-The dashboard presents:
-- 24h forecast vs actual
-- Prediction interval shading (P10-P90) with median forecast
-- Baseline vs LightGBM performance
-- Feature importance with readable business labels
+## Dashboard
+The dashboard is focused on operational readability for stakeholders:
+- 24h forecast versus actual
+- P10-P90 interval shading with median forecast
+- Baseline and LightGBM KPI comparison
+- Variable importance with domain-friendly naming
 
-Live app URL can be found in your Azure Container App output after deployment.
-Because the app is hosted on Azure (not on your local machine), it remains accessible even when your computer is turned off.
+The dashboard is hosted in Azure and remains accessible even when local development machines are offline.
 
 ## Repository Structure
 - `src/swiss_electricity_load/pipeline.py`: ingestion orchestration
 - `src/swiss_electricity_load/features.py`: feature engineering
-- `src/swiss_electricity_load/model.py`: model training and evaluation
+- `src/swiss_electricity_load/model.py`: model training/evaluation
 - `src/swiss_electricity_load/predict.py`: inference from saved models
-- `src/swiss_electricity_load/dashboard.py`: Streamlit dashboard
+- `src/swiss_electricity_load/dashboard.py`: Streamlit application
 - `deploy/azure/deploy.ps1`: Azure deployment automation
-- `.github/workflows/deploy-azure-dashboard.yml`: CI/CD deployment workflow
+- `.github/workflows/deploy-azure-dashboard.yml`: CI/CD workflow
 
 ## Notes
-- Primary user-facing interface is the dashboard.
-- CLI internals remain available for experimentation, but are intentionally not the main usage path.
+- Primary user interface is the dashboard.
+- CLI modules are retained for reproducibility, automation, and diagnostics.
