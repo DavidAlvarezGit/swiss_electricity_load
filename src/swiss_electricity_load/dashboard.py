@@ -255,7 +255,6 @@ def render_dashboard(processed_dir="data/processed"):
     downsample_mode = "Auto"
     every_n = None
     show_tail_rows = 0
-    show_heavy_tables = st.sidebar.checkbox("Show large data tables", value=False)
     force_reload = st.sidebar.button("Reload data")
     if force_reload:
         st.cache_data.clear()
@@ -370,10 +369,7 @@ def render_dashboard(processed_dir="data/processed"):
                         qc1.metric("Quantile Coverage (q10-q90)", f"{coverage:.2f}%")
                         qc2.metric("Average Interval Width", _format_number(width))
 
-                    if show_heavy_tables:
-                        st.dataframe(view.tail(60), width="stretch")
-                    else:
-                        st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
+                    st.caption("Table hidden for performance.")
 
         with tabs[1]:
             st.subheader("Latest Inference")
@@ -390,10 +386,7 @@ def render_dashboard(processed_dir="data/processed"):
                     cols = [c for c in ["lightgbm_pred", "lightgbm_q10", "lightgbm_q50", "lightgbm_q90"] if c in inf_view.columns]
                     if cols:
                         render_timeseries_chart(st, inf_view, cols, title="Latest Inference")
-                    if show_heavy_tables:
-                        st.dataframe(inf_view.tail(60), width="stretch")
-                    else:
-                        st.caption("Table hidden for performance. Enable 'Show large data tables' in sidebar.")
+                    st.caption("Table hidden for performance.")
 
                     csv_bytes = inf_view.to_csv(index=False).encode("utf-8")
                     st.download_button(
@@ -420,7 +413,7 @@ def render_dashboard(processed_dir="data/processed"):
             for m in saved_models:
                 st.write(f"- `{m}`")
 
-    horizon_tabs = st.tabs(["Forecast 1h", "Forecast 12h", "Artifacts"])
+    horizon_tabs = st.tabs(["Forecast 1h", "Forecast 12h", "Forecast 24h", "Artifacts"])
 
     with horizon_tabs[0]:
         render_forecast_panel("_h1", "1h")
@@ -429,6 +422,9 @@ def render_dashboard(processed_dir="data/processed"):
         render_forecast_panel("_h12", "12h")
 
     with horizon_tabs[2]:
+        render_forecast_panel("_h24", "24h")
+
+    with horizon_tabs[3]:
         st.subheader("Artifacts")
         st.write(f"Processed directory: `{processed_dir}`")
         art_df = _build_artifact_table(processed_dir)
